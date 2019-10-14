@@ -37,23 +37,14 @@ func logError(description string, err error) {
 	log.Println("[ ERROR ]: ", description, err)
 }
 
-// Canvas matrix. Items are colors.
-var matrix = [CanvasRows][CanvasCols]string{}
-
-// We store all websocket connections with active users. When someone has changed pixel color we iterate over
-// `allConnections' and notify each user about changes.
-type ConnectionInfo struct {
-	// TODO: User info
-}
-
-var allConnections = make(map[*websocket.Conn]ConnectionInfo)
-
 // Client request should be JSON with:
 // method -- method name ("setPixelColor" for example).
 // args -- additional args for method (may be nil). Different schema for each method.
+// sessionToken -- session token for user authentication.
 type WebSocketRequestData struct {
-	Method string                 `json:"method"`
-	Args   map[string]interface{} `json:"args"`
+	Method       string                 `json:"method"`
+	Args         map[string]interface{} `json:"args"`
+	SessionToken string                 `json:"sessionToken"`
 }
 
 // Server message is JSON with:
@@ -111,8 +102,154 @@ func isWsClosedOk(err error) bool {
 	return websocket.IsCloseError(err, websocket.CloseGoingAway, websocket.CloseNormalClosure)
 }
 
+// Handle setPixelColor method.
+//
+// User is changing pixel color.
+// Expected JSON:
+// {
+//     "method": "setPixelColor",
+//     "data": {
+//         "x": <X coordinate>,
+//         "y": <Y coordinate>,
+//         "color": "<new color>"
+//     }
+// }
+// All open connections get event notification:
+// {
+//     "kind": "pixelColor",
+//     "data": { (same) }
+// }
+func handleSetPixelColor(
+	wsMessage *WebSocketRequestData,
+	mt int,
+	c *websocket.Conn,
+	matrix *[CanvasRows][CanvasCols]string,
+	allConnections map[*websocket.Conn]struct{},
+) bool {
+	pixel, err := argsToPixelInfo(wsMessage.Args)
+	if err != nil {
+		// Problems with user data. Just ignore.
+		logError("unmarshal (data)", err)
+		return true
+	}
+
+	log.Printf("setPixelColor(x=%d, y=%d, color=%s)\n", pixel.X, pixel.Y, pixel.Color)
+
+	matrix[pixel.Y][pixel.X] = pixel.Color
+
+	wsResponse := WebSocketResponseData{
+		Kind: "pixelColor",
+		Data: pixel,
+	}
+	response, err := json.Marshal(&wsResponse)
+	if err != nil {
+		logError("marshal", err)
+		return true
+	}
+
+	// Notify all connections.
+	// Also collect invalid connections and remove them from `allConnections' list.
+	invalidConnections := make([]*websocket.Conn, 0, 1)
+	for conn := range allConnections {
+		err = conn.WriteMessage(mt, response)
+		if err != nil {
+			if !isWsClosedOk(err) {
+				logError("read", err)
+			}
+			invalidConnections = append(invalidConnections, conn)
+		}
+	}
+
+	isCurrentConnectionInvalid := false
+	for _, conn := range invalidConnections {
+		delete(allConnections, conn)
+
+		if conn == c {
+			isCurrentConnectionInvalid = true
+		}
+	}
+	if isCurrentConnectionInvalid {
+		return false
+	}
+
+	return true
+}
+
+// Handle connectMe method
+//
+// New user is connected.
+// Expected JSON:
+// {
+//     "method": "connectMe"
+// }
+// User should get event:
+// {
+//     "kind": "allPixelsColors",
+//     "data": [
+//         {
+//             "x": 0, "y": 0, "color": <(0;0) pixel color>
+//         },
+//         ... (for each pixel)
+//     ]
+// }
+// TODO: Send cooldown info (user may open multiple tabs).
+func handleConnectMe(
+	wsMessage *WebSocketRequestData,
+	mt int,
+	c *websocket.Conn,
+	matrix *[CanvasRows][CanvasCols]string,
+	allConnections map[*websocket.Conn]struct{},
+) bool {
+	log.Printf("connectMe()\n")
+
+	_, ok := allConnections[c]
+	if !ok {
+		allConnections[c] = struct{}{}
+	}
+
+	pixelsData := [CanvasRows * CanvasCols]PixelInfo{}
+
+	for y := 0; y < CanvasRows; y++ {
+		for x := 0; x < CanvasCols; x++ {
+			position := y*CanvasCols + x
+			pixelsData[position] = PixelInfo{
+				X:     x,
+				Y:     y,
+				Color: matrix[y][x],
+			}
+		}
+	}
+
+	wsResponse := WebSocketResponseData{
+		Kind: "allPixelsColors",
+		Data: pixelsData,
+	}
+	response, err := json.Marshal(&wsResponse)
+	if err != nil {
+		logError("marshal", err)
+		return true
+	}
+
+	err = c.WriteMessage(mt, response)
+	if err != nil {
+		if isWsClosedOk(err) {
+			delete(allConnections, c)
+		} else {
+			logError("read", err)
+		}
+		return false
+	}
+
+	return true
+}
+
 // Handle client requests.
-func serve(w http.ResponseWriter, r *http.Request) {
+func serve(
+	w http.ResponseWriter,
+	r *http.Request,
+	matrix *[CanvasRows][CanvasCols]string,
+	allConnections map[*websocket.Conn]struct{},
+) {
 	upgraderConfig := websocket.Upgrader{
 		// Do not check origin. Allow all incoming connections. CSRFs are welcome.
 		// TODO: Check origin by wildcard. E.g. instance-*.example.com:8765.
@@ -147,135 +284,30 @@ func serve(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 
+		ok := true
 		switch wsMessage.Method {
 		case "setPixelColor":
-			// User is changing pixel color.
-			// Expected JSON:
-			// {
-			//     "method": "setPixelColor",
-			//     "data": {
-			//         "x": <X coordinate>,
-			//         "y": <Y coordinate>,
-			//         "color": "<new color>"
-			//     }
-			// }
-			// All open connections get event notification:
-			// {
-			//     "kind": "pixelColor",
-			//     "data": { (same) }
-			// }
-
-			pixel, err := argsToPixelInfo(wsMessage.Args)
-			if err != nil {
-				// Problems with user data. Just ignore.
-				logError("unmarshal (data)", err)
-				break
-			}
-
-			log.Printf("setPixelColor(x=%d, y=%d, color=%s)\n", pixel.X, pixel.Y, pixel.Color)
-
-			matrix[pixel.Y][pixel.X] = pixel.Color
-
-			wsResponse := WebSocketResponseData{
-				Kind: "pixelColor",
-				Data: pixel,
-			}
-			response, err := json.Marshal(&wsResponse)
-			if err != nil {
-				logError("marshal", err)
-				break
-			}
-
-			// Notify all connections.
-			// Also collect invalid connections and remove them from `allConnections' list.
-			invalidConnections := make([]*websocket.Conn, 0, 1)
-			for conn := range allConnections {
-				err = conn.WriteMessage(mt, response)
-				if err != nil {
-					if !isWsClosedOk(err) {
-						logError("read", err)
-					}
-					invalidConnections = append(invalidConnections, conn)
-				}
-			}
-
-			isCurrentConnectionInvalid := false
-			for _, conn := range invalidConnections {
-				delete(allConnections, conn)
-
-				if conn == c {
-					isCurrentConnectionInvalid = true
-				}
-			}
-			if isCurrentConnectionInvalid {
-				return
-			}
-
+			ok = handleSetPixelColor(&wsMessage, mt, c, matrix, allConnections)
 		case "connectMe":
-			// New user is connected.
-			// Expected JSON:
-			// {
-			//     "method": "connectMe"
-			// }
-			// User should get event:
-			// {
-			//     "kind": "allPixelsColors",
-			//     "data": [
-			//         {
-			//             "x": 0, "y": 0, "color": <(0;0) pixel color>
-			//         },
-			//         ... (for each pixel)
-			//     ]
-			// }
-			// TODO: Send cooldown info (user may open multiple tabs).
-
-			log.Printf("connectMe()\n")
-
-			_, ok := allConnections[c]
-			if !ok {
-				allConnections[c] = ConnectionInfo{}
-			}
-
-			pixelsData := [CanvasRows * CanvasCols]PixelInfo{}
-
-			for y := 0; y < CanvasRows; y++ {
-				for x := 0; x < CanvasCols; x++ {
-					position := y*CanvasCols + x
-					pixelsData[position] = PixelInfo{
-						X:     x,
-						Y:     y,
-						Color: matrix[y][x],
-					}
-				}
-			}
-
-			wsResponse := WebSocketResponseData{
-				Kind: "allPixelsColors",
-				Data: pixelsData,
-			}
-			response, err := json.Marshal(&wsResponse)
-			if err != nil {
-				logError("marshal", err)
-				break
-			}
-
-			err = c.WriteMessage(mt, response)
-			if err != nil {
-				if isWsClosedOk(err) {
-					delete(allConnections, c)
-				} else {
-					logError("read", err)
-				}
-				return
-			}
-
+			ok = handleConnectMe(&wsMessage, mt, c, matrix, allConnections)
 		default:
 			logError("unsupported method", nil)
+		}
+
+		if !ok {
+			return
 		}
 	}
 }
 
 func main() {
+	// List of all connections.
+	// We store all websocket connections with active users. When someone has changed pixel color we iterate over
+	// `allConnections' and notify each user about changes.
+	allConnections := make(map[*websocket.Conn]struct{})
+
+	// Allocate canvas matrix. Items are colors.
+	matrix := [CanvasRows][CanvasCols]string{}
 	for y := 0; y < CanvasRows; y++ {
 		for x := 0; x < CanvasCols; x++ {
 			if (x+y)%2 == 0 {
@@ -286,6 +318,8 @@ func main() {
 		}
 	}
 
-	http.HandleFunc("/", serve)
+	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		serve(w, r, &matrix, allConnections)
+	})
 	log.Fatal(http.ListenAndServe(ListenAddr, nil))
 }
