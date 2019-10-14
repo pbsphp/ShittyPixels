@@ -1,0 +1,13 @@
+.palet-table {
+    border: 1px solid black;
+    table-layout: fixed;
+    width: 300px;
+    height: 25px;
+}
+
+.palet-cell {
+}
+
+.pallet-cell-selected {
+    outline: 3px solid brown;
+}

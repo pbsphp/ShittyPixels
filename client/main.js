@@ -45,7 +45,7 @@ class CanvasWrapper {
 
 
 class Controller {
-    constructor(canvas) {
+    constructor(canvas, paletManager) {
         this.connect = this.connect.bind(this);
         this.handleMessage = this.handleMessage.bind(this);
         this.handleCanvasClick = this.handleCanvasClick.bind(this);
@@ -58,6 +58,8 @@ class Controller {
         this.sock = new WebSocket(WEB_SOCKET_ADDR);
         this.sock.onmessage = this.handleMessage;
         this.sock.onopen = this.connect;
+
+        this.paletManager = paletManager;
     }
 
     connect() {
@@ -99,7 +101,7 @@ class Controller {
                 args: {
                     x: x,
                     y: y,
-                    color: "black"
+                    color: this.paletManager.selectedColor,
                 },
             })
         );
@@ -114,5 +116,48 @@ class Controller {
         for (let datum of data) {
             this.handlePixelColorMessage(datum);
         }
+    }
+}
+
+
+class PaletManager {
+    constructor(tableDomElement, colorsList) {
+        this.fillPaletTable = this.fillPaletTable.bind(this);
+        this.selectCell = this.selectCell.bind(this);
+        this.handleColorChoose = this.handleColorChoose.bind(this);
+
+        this.tableDomElement = tableDomElement;
+        this.colorsList = colorsList;
+
+        this.selectedColor = null;
+    }
+
+    fillPaletTable() {
+        const paletRow = this.tableDomElement.insertRow(0);
+        for (let color of paletConfig) {
+            const cell = paletRow.insertCell(-1);
+            cell.classList.add("palet-cell");
+            cell.style.backgroundColor = color;
+            cell.dataset.color = color;
+            cell.onclick = this.handleColorChoose;
+        }
+
+        this.selectCell(paletRow.cells[0]);
+    }
+
+    selectCell(selectedCell) {
+        this.selectedColor = selectedCell.dataset.color;
+
+        const oldCells = this.tableDomElement.getElementsByClassName(
+            "pallet-cell-selected");
+        for (let cell of oldCells) {
+            cell.classList.remove("pallet-cell-selected");
+        }
+
+        selectedCell.classList.add("pallet-cell-selected");
+    }
+
+    handleColorChoose(evt) {
+        this.selectCell(evt.srcElement);
     }
 }

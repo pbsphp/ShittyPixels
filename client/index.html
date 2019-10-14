@@ -3,13 +3,41 @@
     <head>
         <meta charset="utf-8">
         <script type="text/javascript" src="./main.js"></script>
+        <link rel="stylesheet" type="text/css" href="main.css">
     </head>
     <body>
-        <canvas id="main-canvas" width="1000" height="500"></canvas>
+        <div>
+            <table id="palet-table" class="palet-table" border="1">
+            </table>
+        </div>
+
+        <div>
+            <canvas id="main-canvas" width="1000" height="500"></canvas>
+        </div>
 
         <script type="text/javascript">
+            // Hardcoded palet.
+            const paletConfig = [
+                "white",
+                "black",
+                "brown",
+                "green",
+                "yellow",
+                "blue",
+                "orange",
+                "cyan",
+                "red",
+                "violet",
+                "gray",
+            ];
+
+            const paletTable = document.getElementById("palet-table");
+            const paletManager = new PaletManager(paletTable, paletConfig);
+            paletManager.fillPaletTable();
+
             const canvas = document.getElementById("main-canvas");
-            const controller = new Controller(canvas);
+            const controller = new Controller(canvas, paletManager);
+
         </script>
     </body>
 </html>
