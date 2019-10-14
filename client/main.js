@@ -19,6 +19,12 @@ const PIXEL_SIZE = 10;
 const CANVAS_ROWS = 50;
 const CANVAS_COLS = 100;
 
+const WEB_SOCKET_ADDR = "ws://localhost:8765/";
+
+// Stub. Will be unique for each tab.
+// TODO: users and auth.
+const SESSION_TOKEN = "token_" + Math.random();
+
 
 class CanvasWrapper {
     constructor(canvas) {
@@ -49,7 +55,7 @@ class Controller {
         this.canvasWrapper = new CanvasWrapper(canvas);
         canvas.onclick = this.handleCanvasClick;
 
-        this.sock = new WebSocket("ws://localhost:8765/");
+        this.sock = new WebSocket(WEB_SOCKET_ADDR);
         this.sock.onmessage = this.handleMessage;
         this.sock.onopen = this.connect;
     }
@@ -58,6 +64,7 @@ class Controller {
         this.sock.send(
             JSON.stringify({
                 method: "connectMe",
+                sessionToken: SESSION_TOKEN,
             })
         );
     }
@@ -88,6 +95,7 @@ class Controller {
         this.sock.send(
             JSON.stringify({
                 method: "setPixelColor",
+                sessionToken: SESSION_TOKEN,
                 args: {
                     x: x,
                     y: y,
