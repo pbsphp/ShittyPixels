@@ -21,15 +21,24 @@ package main
 import (
 	"encoding/json"
 	"errors"
+	"github.com/go-redis/redis"
 	"github.com/gorilla/websocket"
 	"log"
 	"net/http"
+	"strconv"
+	"time"
 )
 
 const (
 	ListenAddr = "localhost:8765"
 	CanvasRows = 50
 	CanvasCols = 100
+
+	CooldownSeconds = 5
+
+	RedisAddr     = "localhost:6379"
+	RedisPassword = ""
+	RedisDatabase = 0
 )
 
 // Print error message with [ ERROR ] prefix and description.
@@ -60,6 +69,53 @@ type PixelInfo struct {
 	X     int    `json:"x"`
 	Y     int    `json:"y"`
 	Color string `json:"color"`
+}
+
+// Is token present in Redis database
+func isSessionTokenPresent(rdb *redis.Client, token string) (error, bool) {
+	err := rdb.Get("sessionToken:" + token).Err()
+	if err != nil && err != redis.Nil {
+		return err, false
+	}
+
+	return nil, err != redis.Nil
+}
+
+// Check for existing cooldown information in Redis database.
+// If there is none, insert new. Should be atomic.
+func testAndUpdateSessionCooldown(rdb *redis.Client, token string) (error, bool) {
+	// Unfortunately, GETSET command has no expiration time argument. Also there is no test-and-set command.
+	// So we do this:
+	// x = GETSET token, expireTime
+	// if x is present and x > now:
+	//   SET token x
+	// Also add expire time to avoid outdated records.
+	key := "cooldown:" + token
+	currentTime := time.Now().Unix()
+	expireTime := currentTime + CooldownSeconds
+
+	oldValStr, err := rdb.GetSet(key, expireTime).Result()
+	if err != nil && err != redis.Nil {
+		return err, false
+	}
+
+	if err == nil {
+		if oldVal, err := strconv.ParseInt(oldValStr, 10, 64); err == nil {
+			if oldVal > currentTime {
+				if err := rdb.Set(key, oldValStr, CooldownSeconds*time.Second).Err(); err != nil {
+					return err, false
+				}
+				return nil, true
+			}
+		}
+	}
+
+	// Set expire time to avoid outdated records.
+	if err := rdb.Expire(key, CooldownSeconds*time.Second).Err(); err != nil {
+		return err, false
+	}
+
+	return nil, false
 }
 
 // Convert map returned by json.Unmarshal to PixelInfo.
@@ -123,6 +179,7 @@ func handleSetPixelColor(
 	wsMessage *WebSocketRequestData,
 	mt int,
 	c *websocket.Conn,
+	rdb *redis.Client,
 	matrix *[CanvasRows][CanvasCols]string,
 	allConnections map[*websocket.Conn]struct{},
 ) bool {
@@ -130,6 +187,25 @@ func handleSetPixelColor(
 	if err != nil {
 		// Problems with user data. Just ignore.
 		logError("unmarshal (data)", err)
+		return true
+	}
+
+	err, tokenPresent := isSessionTokenPresent(rdb, wsMessage.SessionToken)
+	if err != nil {
+		logError("redis check token", err)
+		return false
+	}
+	if !tokenPresent {
+		// Session does not exist. Ignore request.
+		return true
+	}
+
+	err, hasOldCooldown := testAndUpdateSessionCooldown(rdb, wsMessage.SessionToken)
+	if err != nil {
+		logError("update redis cooldown", err)
+	}
+	if hasOldCooldown {
+		// Cooldown time does not expire yet. Maybe cheating. Ignore request.
 		return true
 	}
 
@@ -197,6 +273,7 @@ func handleConnectMe(
 	wsMessage *WebSocketRequestData,
 	mt int,
 	c *websocket.Conn,
+	rdb *redis.Client,
 	matrix *[CanvasRows][CanvasCols]string,
 	allConnections map[*websocket.Conn]struct{},
 ) bool {
@@ -218,6 +295,15 @@ func handleConnectMe(
 				Color: matrix[y][x],
 			}
 		}
+	}
+
+	// Add session token to Redis.
+	// It's workaround. Token should be added there when user is logging in.
+	// TODO: Add auth and remove it.
+	err := rdb.Set("sessionToken:"+wsMessage.SessionToken, "", 0).Err()
+	if err != nil {
+		logError("write session token", err)
+		return false
 	}
 
 	wsResponse := WebSocketResponseData{
@@ -247,6 +333,7 @@ func handleConnectMe(
 func serve(
 	w http.ResponseWriter,
 	r *http.Request,
+	rdb *redis.Client,
 	matrix *[CanvasRows][CanvasCols]string,
 	allConnections map[*websocket.Conn]struct{},
 ) {
@@ -287,9 +374,9 @@ func serve(
 		ok := true
 		switch wsMessage.Method {
 		case "setPixelColor":
-			ok = handleSetPixelColor(&wsMessage, mt, c, matrix, allConnections)
+			ok = handleSetPixelColor(&wsMessage, mt, c, rdb, matrix, allConnections)
 		case "connectMe":
-			ok = handleConnectMe(&wsMessage, mt, c, matrix, allConnections)
+			ok = handleConnectMe(&wsMessage, mt, c, rdb, matrix, allConnections)
 		default:
 			logError("unsupported method", nil)
 		}
@@ -318,8 +405,19 @@ func main() {
 		}
 	}
 
+	// Redis connection. Redis stores session info and cooldowns.
+	rdb := redis.NewClient(&redis.Options{
+		Addr:     RedisAddr,
+		Password: RedisPassword,
+		DB:       RedisDatabase,
+	})
+	err := rdb.Ping().Err()
+	if err != nil {
+		log.Fatal("cannot connect to redis server", err)
+	}
+
 	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		serve(w, r, &matrix, allConnections)
+		serve(w, r, rdb, &matrix, allConnections)
 	})
 	log.Fatal(http.ListenAndServe(ListenAddr, nil))
 }
