@@ -25,6 +25,8 @@ const WEB_SOCKET_ADDR = "ws://localhost:8765/";
 // TODO: users and auth.
 const SESSION_TOKEN = "token_" + Math.random();
 
+const COOLDOWN_SECONDS = 5;
+
 
 class CanvasWrapper {
     constructor(canvas) {
@@ -45,7 +47,7 @@ class CanvasWrapper {
 
 
 class Controller {
-    constructor(canvas, paletManager) {
+    constructor(canvas, paletWidget, timerWidget) {
         this.connect = this.connect.bind(this);
         this.handleMessage = this.handleMessage.bind(this);
         this.handleCanvasClick = this.handleCanvasClick.bind(this);
@@ -59,7 +61,8 @@ class Controller {
         this.sock.onmessage = this.handleMessage;
         this.sock.onopen = this.connect;
 
-        this.paletManager = paletManager;
+        this.paletWidget = paletWidget;
+        this.timerWidget = timerWidget;
     }
 
     connect() {
@@ -87,24 +90,28 @@ class Controller {
     }
 
     handleCanvasClick(evt) {
-        const canvas = this.canvasWrapper.canvas;
-        const rect = canvas.getBoundingClientRect();
-        const realX = evt.clientX - rect.left;
-        const realY = evt.clientY - rect.top;
-        const x = Math.floor(realX / PIXEL_SIZE);
-        const y = Math.floor(realY / PIXEL_SIZE);
+        if (this.timerWidget.cooldownExpiry === null) {
+            const canvas = this.canvasWrapper.canvas;
+            const rect = canvas.getBoundingClientRect();
+            const realX = evt.clientX - rect.left;
+            const realY = evt.clientY - rect.top;
+            const x = Math.floor(realX / PIXEL_SIZE);
+            const y = Math.floor(realY / PIXEL_SIZE);
 
-        this.sock.send(
-            JSON.stringify({
-                method: "setPixelColor",
-                sessionToken: SESSION_TOKEN,
-                args: {
-                    x: x,
-                    y: y,
-                    color: this.paletManager.selectedColor,
-                },
-            })
-        );
+            this.sock.send(
+                JSON.stringify({
+                    method: "setPixelColor",
+                    sessionToken: SESSION_TOKEN,
+                    args: {
+                        x: x,
+                        y: y,
+                        color: this.paletWidget.selectedColor,
+                    },
+                })
+            );
+
+            this.timerWidget.countDown(COOLDOWN_SECONDS);
+        }
     }
 
     handlePixelColorMessage(data) {
@@ -120,7 +127,7 @@ class Controller {
 }
 
 
-class PaletManager {
+class PaletWidget {
     constructor(tableDomElement, colorsList) {
         this.fillPaletTable = this.fillPaletTable.bind(this);
         this.selectCell = this.selectCell.bind(this);
@@ -159,5 +166,48 @@ class PaletManager {
 
     handleColorChoose(evt) {
         this.selectCell(evt.srcElement);
+    }
+}
+
+
+class TimerWidget {
+    constructor(domElement) {
+        this.updateValue = this.updateValue.bind(this);
+        this.countDown = this.countDown.bind(this);
+
+        this.domElement = domElement;
+        this.cooldownExpiry = null;
+
+        // Simple ascii-animation.
+        this.progressBarStates = [
+            "/", "−", "\\", "|",
+        ];
+        this.progressBarState = 0;
+
+        this.intervalObj = null;
+    }
+
+    updateValue(sec) {
+        const progressBarIcon = this.progressBarStates[this.progressBarState];
+        this.progressBarState = (
+            (this.progressBarState + 1) % this.progressBarStates.length);
+        this.domElement.innerHTML = (
+            "" + sec + "&nbsp&nbsp&nbsp" + progressBarIcon);
+    }
+
+    countDown(seconds) {
+        const dateNow = () => Math.floor((new Date()).getTime() / 1000);
+        this.cooldownExpiry = dateNow() + seconds;
+        this.intervalObj = setInterval(() => {
+            const secondsToWait = this.cooldownExpiry - dateNow();
+            if (secondsToWait > 0) {
+                this.updateValue(secondsToWait);
+            } else {
+                this.domElement.innerHTML = "";
+                this.cooldownExpiry = null;
+                clearInterval(this.intervalObj);
+                this.intervalObj = null;
+            }
+        }, 100);
     }
 }

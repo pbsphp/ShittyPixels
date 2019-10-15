@@ -6,9 +6,9 @@
         <link rel="stylesheet" type="text/css" href="main.css">
     </head>
     <body>
-        <div>
-            <table id="palet-table" class="palet-table" border="1">
-            </table>
+        <div class="controls-container">
+            <table id="palet-table" class="palet-table" border="1"></table>
+            <span id="cooldown-timer" class="cooldown-timer"></span>
         </div>
 
         <div>
@@ -32,12 +32,14 @@
             ];
 
             const paletTable = document.getElementById("palet-table");
-            const paletManager = new PaletManager(paletTable, paletConfig);
-            paletManager.fillPaletTable();
+            const paletWidget = new PaletWidget(paletTable, paletConfig);
+            paletWidget.fillPaletTable();
+
+            const timerElem = document.getElementById("cooldown-timer");
+            const timerWidget = new TimerWidget(timerElem);
 
             const canvas = document.getElementById("main-canvas");
-            const controller = new Controller(canvas, paletManager);
-
+            const controller = new Controller(canvas, paletWidget, timerWidget);
         </script>
     </body>
 </html>
