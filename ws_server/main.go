@@ -268,7 +268,6 @@ func handleSetPixelColor(
 //         ... (for each pixel)
 //     ]
 // }
-// TODO: Send cooldown info (user may open multiple tabs).
 func handleConnectMe(
 	wsMessage *WebSocketRequestData,
 	mt int,
@@ -324,6 +323,40 @@ func handleConnectMe(
 			logError("read", err)
 		}
 		return false
+	}
+
+	cooldownStr, err := rdb.Get("cooldown:" + wsMessage.SessionToken).Result()
+	if err != nil && err != redis.Nil {
+		logError("redis read cooldown", err)
+		return false
+	}
+	if err == nil {
+		cooldown, err := strconv.ParseInt(cooldownStr, 10, 64)
+		if err != nil {
+			logError("redis read cooldown (invalid value)", err)
+			return false
+		}
+		currentTime := time.Now().Unix()
+
+		wsResponse := WebSocketResponseData{
+			Kind: "cooldownInfo",
+			Data: cooldown - currentTime,
+		}
+		response, err := json.Marshal(&wsResponse)
+		if err != nil {
+			logError("marshal", err)
+			return true
+		}
+
+		err = c.WriteMessage(mt, response)
+		if err != nil {
+			if isWsClosedOk(err) {
+				delete(allConnections, c)
+			} else {
+				logError("read", err)
+			}
+			return false
+		}
 	}
 
 	return true

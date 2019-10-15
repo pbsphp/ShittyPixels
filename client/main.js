@@ -53,6 +53,7 @@ class Controller {
         this.handleCanvasClick = this.handleCanvasClick.bind(this);
         this.handlePixelColorMessage = this.handlePixelColorMessage.bind(this);
         this.handleAllPixelsColorsMessage = this.handleAllPixelsColorsMessage.bind(this);
+        this.handleCooldownInfoMessage = this.handleCooldownInfoMessage.bind(this);
 
         this.canvasWrapper = new CanvasWrapper(canvas);
         canvas.onclick = this.handleCanvasClick;
@@ -82,6 +83,9 @@ class Controller {
             break;
         case "allPixelsColors":
             this.handleAllPixelsColorsMessage(message.data);
+            break;
+        case "cooldownInfo":
+            this.handleCooldownInfoMessage(message.data);
             break;
 
         default:
@@ -123,6 +127,10 @@ class Controller {
         for (let datum of data) {
             this.handlePixelColorMessage(datum);
         }
+    }
+
+    handleCooldownInfoMessage(data) {
+        this.timerWidget.countDown(data);
     }
 }
 
@@ -196,6 +204,11 @@ class TimerWidget {
     }
 
     countDown(seconds) {
+        if (this.intervalObj !== null) {
+            clearInterval(this.intervalObj);
+            this.intervalObj = null;
+        }
+
         const dateNow = () => Math.floor((new Date()).getTime() / 1000);
         this.cooldownExpiry = dateNow() + seconds;
         this.intervalObj = setInterval(() => {
