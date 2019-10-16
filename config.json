@@ -1,0 +1,25 @@
+{
+    "CanvasRows": 50,
+    "CanvasCols": 100,
+    "CooldownSeconds": 5,
+
+    "PaletteColors": [
+        "black",
+        "white",
+        "brown",
+        "green",
+        "yellow",
+        "blue",
+        "orange",
+        "cyan",
+        "red",
+        "violet",
+        "gray"
+    ],
+
+    "RedisAddr": "localhost:6379",
+    "RedisPassword": "",
+    "RedisDatabase": 0,
+
+    "WebSocketAppAddr": "ws://localhost:8765/"
+}

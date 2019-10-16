@@ -16,16 +16,6 @@
 
 
 const PIXEL_SIZE = 10;
-const CANVAS_ROWS = 50;
-const CANVAS_COLS = 100;
-
-const WEB_SOCKET_ADDR = "ws://localhost:8765/";
-
-// Stub. Will be unique for each tab.
-// TODO: users and auth.
-const SESSION_TOKEN = "token_" + Math.random();
-
-const COOLDOWN_SECONDS = 5;
 
 
 class CanvasWrapper {
@@ -47,7 +37,7 @@ class CanvasWrapper {
 
 
 class Controller {
-    constructor(canvas, paletWidget, timerWidget) {
+    constructor(config, sessionToken, canvas, paletteWidget, timerWidget) {
         this.connect = this.connect.bind(this);
         this.handleMessage = this.handleMessage.bind(this);
         this.handleCanvasClick = this.handleCanvasClick.bind(this);
@@ -57,20 +47,25 @@ class Controller {
 
         this.canvasWrapper = new CanvasWrapper(canvas);
         canvas.onclick = this.handleCanvasClick;
+        canvas.width = config["CanvasRows"] * PIXEL_SIZE;
+        canvas.height = config["CanvasCols"] * PIXEL_SIZE;
 
-        this.sock = new WebSocket(WEB_SOCKET_ADDR);
+        this.sock = new WebSocket(config["WebSocketAppAddr"]);
         this.sock.onmessage = this.handleMessage;
         this.sock.onopen = this.connect;
 
-        this.paletWidget = paletWidget;
+        this.paletteWidget = paletteWidget;
         this.timerWidget = timerWidget;
+
+        this.sessionToken = sessionToken;
+        this.config = config;
     }
 
     connect() {
         this.sock.send(
             JSON.stringify({
                 method: "connectMe",
-                sessionToken: SESSION_TOKEN,
+                sessionToken: this.sessionToken,
             })
         );
     }
@@ -105,16 +100,16 @@ class Controller {
             this.sock.send(
                 JSON.stringify({
                     method: "setPixelColor",
-                    sessionToken: SESSION_TOKEN,
+                    sessionToken: this.sessionToken,
                     args: {
                         x: x,
                         y: y,
-                        color: this.paletWidget.selectedColor,
+                        color: this.paletteWidget.selectedColor,
                     },
                 })
             );
 
-            this.timerWidget.countDown(COOLDOWN_SECONDS);
+            this.timerWidget.countDown(this.config["CooldownSeconds"]);
         }
     }
 
@@ -135,9 +130,9 @@ class Controller {
 }
 
 
-class PaletWidget {
+class PaletteWidget {
     constructor(tableDomElement, colorsList) {
-        this.fillPaletTable = this.fillPaletTable.bind(this);
+        this.fillPaletteTable = this.fillPaletteTable.bind(this);
         this.selectCell = this.selectCell.bind(this);
         this.handleColorChoose = this.handleColorChoose.bind(this);
 
@@ -147,17 +142,17 @@ class PaletWidget {
         this.selectedColor = null;
     }
 
-    fillPaletTable() {
-        const paletRow = this.tableDomElement.insertRow(0);
-        for (let color of paletConfig) {
-            const cell = paletRow.insertCell(-1);
-            cell.classList.add("palet-cell");
+    fillPaletteTable() {
+        const paletteRow = this.tableDomElement.insertRow(0);
+        for (let color of paletteConfig) {
+            const cell = paletteRow.insertCell(-1);
+            cell.classList.add("palette-cell");
             cell.style.backgroundColor = color;
             cell.dataset.color = color;
             cell.onclick = this.handleColorChoose;
         }
 
-        this.selectCell(paletRow.cells[0]);
+        this.selectCell(paletteRow.cells[0]);
     }
 
     selectCell(selectedCell) {

@@ -7,39 +7,41 @@
     </head>
     <body>
         <div class="controls-container">
-            <table id="palet-table" class="palet-table" border="1"></table>
+            <table id="palette-table" class="palette-table" border="1"></table>
             <span id="cooldown-timer" class="cooldown-timer"></span>
         </div>
 
         <div>
-            <canvas id="main-canvas" width="1000" height="500"></canvas>
+            <canvas id="main-canvas"></canvas>
         </div>
 
         <script type="text/javascript">
-            // Hardcoded palet.
-            const paletConfig = [
-                "white",
-                "black",
-                "brown",
-                "green",
-                "yellow",
-                "blue",
-                "orange",
-                "cyan",
-                "red",
-                "violet",
-                "gray",
+            const paletteConfig = [
+                {{range $color := .Config.PaletteColors}}
+                    "{{$color}}",
+                {{end}}
             ];
 
-            const paletTable = document.getElementById("palet-table");
-            const paletWidget = new PaletWidget(paletTable, paletConfig);
-            paletWidget.fillPaletTable();
+            const paletteTable = document.getElementById("palette-table");
+            const paletteWidget = new PaletteWidget(paletteTable, paletteConfig);
+            paletteWidget.fillPaletteTable();
 
             const timerElem = document.getElementById("cooldown-timer");
             const timerWidget = new TimerWidget(timerElem);
 
             const canvas = document.getElementById("main-canvas");
-            const controller = new Controller(canvas, paletWidget, timerWidget);
+            const controller = new Controller(
+                {
+                    CanvasRows: {{.Config.CanvasRows}},
+                    CanvasCols: {{.Config.CanvasCols}},
+                    CooldownSeconds: {{.Config.CooldownSeconds}},
+                    WebSocketAppAddr: "{{.Config.WebSocketAppAddr}}",
+                },
+                "{{.SessionToken}}",
+                canvas,
+                paletteWidget,
+                timerWidget,
+            );
         </script>
     </body>
 </html>

@@ -26,8 +26,22 @@ import (
 	"log"
 	"math/rand"
 	"net/http"
+	"os"
 	"time"
 )
+
+type AppConfig struct {
+	CanvasRows      int
+	CanvasCols      int
+	CooldownSeconds int
+	PaletteColors   []string
+
+	RedisAddress  string
+	RedisPassword string
+	RedisDatabase int
+
+	WebSocketAppAddr string
+}
 
 type UserData struct {
 	Login        string
@@ -54,6 +68,21 @@ func renderTemplate(w http.ResponseWriter, tmpl string, p interface{}) {
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 	}
+}
+
+func mustReadAppConfig(path string) *AppConfig {
+	file, _ := os.Open(path)
+	defer func() {
+		if err := file.Close(); err != nil {
+			panic(err)
+		}
+	}()
+	decoder := json.NewDecoder(file)
+	config := AppConfig{}
+	if err := decoder.Decode(&config); err != nil {
+		panic(err)
+	}
+	return &config
 }
 
 func redisLoad(rdb *redis.Client, entity string, key string, rec interface{}) error {
@@ -139,7 +168,13 @@ func generateSessionToken() string {
 	return string(b)
 }
 
-func indexHandler(w http.ResponseWriter, r *http.Request, rdb *redis.Client, session *SessionData) {
+func indexHandler(
+	w http.ResponseWriter,
+	r *http.Request,
+	rdb *redis.Client,
+	session *SessionData,
+	appConfig *AppConfig,
+) {
 	context := struct {
 		User string
 	}{
@@ -149,7 +184,13 @@ func indexHandler(w http.ResponseWriter, r *http.Request, rdb *redis.Client, ses
 	renderTemplate(w, "index", &context)
 }
 
-func registerHandler(w http.ResponseWriter, r *http.Request, rdb *redis.Client, session *SessionData) {
+func registerHandler(
+	w http.ResponseWriter,
+	r *http.Request,
+	rdb *redis.Client,
+	session *SessionData,
+	appConfig *AppConfig,
+) {
 	if session.Login != "" {
 		http.Redirect(w, r, "/canvas", 302)
 	}
@@ -209,7 +250,13 @@ func registerHandler(w http.ResponseWriter, r *http.Request, rdb *redis.Client, 
 	}
 }
 
-func loginHandler(w http.ResponseWriter, r *http.Request, rdb *redis.Client, session *SessionData) {
+func loginHandler(
+	w http.ResponseWriter,
+	r *http.Request,
+	rdb *redis.Client,
+	session *SessionData,
+	appConfig *AppConfig,
+) {
 	if session.Login != "" {
 		http.Redirect(w, r, "/canvas", 302)
 	}
@@ -260,23 +307,43 @@ func loginHandler(w http.ResponseWriter, r *http.Request, rdb *redis.Client, ses
 	}
 }
 
-func logoutHandler(w http.ResponseWriter, r *http.Request, rdb *redis.Client, session *SessionData) {
+func logoutHandler(
+	w http.ResponseWriter,
+	r *http.Request,
+	rdb *redis.Client,
+	session *SessionData,
+	appConfig *AppConfig,
+) {
 	session.Login = ""
 	session.ValidationErrors = map[string]string{}
 	http.Redirect(w, r, "/", 302)
 }
 
-func canvasHandler(w http.ResponseWriter, r *http.Request, rdb *redis.Client, session *SessionData) {
+func canvasHandler(
+	w http.ResponseWriter,
+	r *http.Request,
+	rdb *redis.Client,
+	session *SessionData,
+	appConfig *AppConfig,
+) {
 	if session.Login == "" {
 		http.Redirect(w, r, "/login", 302)
 	}
 
-	renderTemplate(w, "canvas", nil)
+	context := struct {
+		Config       *AppConfig
+		SessionToken string
+	}{
+		Config:       appConfig,
+		SessionToken: session.Id,
+	}
+	renderTemplate(w, "canvas", context)
 }
 
 func makeHandler(
-	fn func(w http.ResponseWriter, r *http.Request, rdb *redis.Client, session *SessionData),
+	fn func(w http.ResponseWriter, r *http.Request, rdb *redis.Client, session *SessionData, appConfig *AppConfig),
 	rdb *redis.Client,
+	appConfig *AppConfig,
 ) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		cookie, err := r.Cookie("sessionId")
@@ -305,7 +372,7 @@ func makeHandler(
 			})
 		}
 
-		fn(w, r, rdb, session)
+		fn(w, r, rdb, session, appConfig)
 
 		err = storeSession(rdb, session)
 		if err != nil {
@@ -318,17 +385,19 @@ func makeHandler(
 func main() {
 	rand.Seed(time.Now().UnixNano())
 
+	appConfig := mustReadAppConfig("config.json")
+
 	rdb := redis.NewClient(&redis.Options{
-		Addr:     "localhost:6379",
-		Password: "",
-		DB:       0,
+		Addr:     appConfig.RedisAddress,
+		Password: appConfig.RedisPassword,
+		DB:       appConfig.RedisDatabase,
 	})
 
-	http.HandleFunc("/", makeHandler(indexHandler, rdb))
-	http.HandleFunc("/register", makeHandler(registerHandler, rdb))
-	http.HandleFunc("/login", makeHandler(loginHandler, rdb))
-	http.HandleFunc("/logout", makeHandler(logoutHandler, rdb))
-	http.HandleFunc("/canvas", makeHandler(canvasHandler, rdb))
+	http.HandleFunc("/", makeHandler(indexHandler, rdb, appConfig))
+	http.HandleFunc("/register", makeHandler(registerHandler, rdb, appConfig))
+	http.HandleFunc("/login", makeHandler(loginHandler, rdb, appConfig))
+	http.HandleFunc("/logout", makeHandler(logoutHandler, rdb, appConfig))
+	http.HandleFunc("/canvas", makeHandler(canvasHandler, rdb, appConfig))
 
 	http.Handle("/static/", http.StripPrefix("/static/", http.FileServer(http.Dir("static"))))
 
