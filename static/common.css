@@ -1,0 +1,17 @@
+.centered-box {
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    align-items: center;
+    height: 300px;
+}
+
+.centered-box-item {
+    margin: 5px;
+    text-align: center;
+}
+
+.validation-error {
+    margin-left: 15px;
+    color: red;
+}

@@ -1,0 +1,35 @@
+<!doctype html>
+<html>
+    <head>
+        <meta charset="UTF-8">
+        <title>ShittyPixels</title>
+        <link rel="stylesheet" href="https://unpkg.com/sakura.css/css/sakura.css" type="text/css">
+        <link rel="stylesheet" href="/static/common.css" type="text/css">
+    </head>
+    <body>
+        <form method="post" action="/login" class="centered-box">
+            <fieldset>
+                <legend>Log in</legend>
+                <label for="login">Login:</label>
+                <input type="text" id="login" name="login">
+                <br>
+                {{if index .ValidationErrors "login"}}
+                    <span class="validation-error">
+                        {{index .ValidationErrors "login"}}
+                    </span>
+                    <br>
+                {{end}}
+                <label for="password">Password:</label>
+                <input type="password" id="password" name="password">
+                <br>
+                {{if index .ValidationErrors "password"}}
+                    <span class="validation-error">
+                        {{index .ValidationErrors "password"}}
+                    </span>
+                    <br>
+                {{end}}
+                <input type="submit" value="Login">
+            </fieldset>
+        </form>
+    </body>
+</html>
