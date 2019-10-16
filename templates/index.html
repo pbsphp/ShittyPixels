@@ -8,9 +8,16 @@
     </head>
     <body>
         <div class="centered-box">
-            <a href="/register" class="centered-box-item">Register</a><br>
-            <a href="/login" class="centered-box-item">Login</a><br>
-            <a href="/canvas" class="centered-box-item">Canvas</a><br>
+            {{if .User}}
+                <p>
+                    You are logged in as <i>{{.User}}</i>.
+                </p>
+                <a href="/canvas" class="centered-box-item">Canvas</a><br>
+                <a href="/logout" class="centered-box-item">Logout</a><br>
+            {{else}}
+                <a href="/register" class="centered-box-item">Register</a><br>
+                <a href="/login" class="centered-box-item">Login</a><br>
+            {{end}}
         </div>
     </body>
 </html>

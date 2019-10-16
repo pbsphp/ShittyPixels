@@ -140,10 +140,20 @@ func generateSessionToken() string {
 }
 
 func indexHandler(w http.ResponseWriter, r *http.Request, rdb *redis.Client, session *SessionData) {
-	renderTemplate(w, "index", nil)
+	context := struct {
+		User string
+	}{
+		User: session.Login,
+	}
+
+	renderTemplate(w, "index", &context)
 }
 
 func registerHandler(w http.ResponseWriter, r *http.Request, rdb *redis.Client, session *SessionData) {
+	if session.Login != "" {
+		http.Redirect(w, r, "/canvas", 302)
+	}
+
 	if r.Method == "POST" {
 		login := r.FormValue("login")
 		password := r.FormValue("password")
@@ -200,6 +210,10 @@ func registerHandler(w http.ResponseWriter, r *http.Request, rdb *redis.Client, 
 }
 
 func loginHandler(w http.ResponseWriter, r *http.Request, rdb *redis.Client, session *SessionData) {
+	if session.Login != "" {
+		http.Redirect(w, r, "/canvas", 302)
+	}
+
 	if r.Method == "POST" {
 		login := r.FormValue("login")
 		password := r.FormValue("password")
@@ -246,7 +260,17 @@ func loginHandler(w http.ResponseWriter, r *http.Request, rdb *redis.Client, ses
 	}
 }
 
+func logoutHandler(w http.ResponseWriter, r *http.Request, rdb *redis.Client, session *SessionData) {
+	session.Login = ""
+	session.ValidationErrors = map[string]string{}
+	http.Redirect(w, r, "/", 302)
+}
+
 func canvasHandler(w http.ResponseWriter, r *http.Request, rdb *redis.Client, session *SessionData) {
+	if session.Login == "" {
+		http.Redirect(w, r, "/login", 302)
+	}
+
 	renderTemplate(w, "canvas", nil)
 }
 
@@ -303,6 +327,7 @@ func main() {
 	http.HandleFunc("/", makeHandler(indexHandler, rdb))
 	http.HandleFunc("/register", makeHandler(registerHandler, rdb))
 	http.HandleFunc("/login", makeHandler(loginHandler, rdb))
+	http.HandleFunc("/logout", makeHandler(logoutHandler, rdb))
 	http.HandleFunc("/canvas", makeHandler(canvasHandler, rdb))
 
 	http.Handle("/static/", http.StripPrefix("/static/", http.FileServer(http.Dir("static"))))
