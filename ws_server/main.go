@@ -28,6 +28,9 @@ import (
 	"net/http"
 )
 
+// Color of pixel
+type Color uint8
+
 // Print error message with [ ERROR ] prefix and description.
 func logError(description string, err error) {
 	log.Println("[ ERROR ]: ", description, err)
@@ -55,7 +58,7 @@ type WebSocketResponseData struct {
 type PixelInfo struct {
 	X     int    `json:"x"`
 	Y     int    `json:"y"`
-	Color string `json:"color"`
+	Color Color  `json:"color"`
 }
 
 // Is token present in Redis database
@@ -90,15 +93,15 @@ func argsToPixelInfo(args map[string]interface{}) (*PixelInfo, error) {
 	if !ok {
 		return nil, errors.New("expected 'y':Number key")
 	}
-	color, ok := rawColor.(string)
+	colorNumber, ok := rawColor.(float64)
 	if !ok {
-		return nil, errors.New("expected 'color':String key")
+		return nil, errors.New("expected 'color':Number key")
 	}
 
 	return &PixelInfo{
 		X:     int(x),
 		Y:     int(y),
-		Color: color,
+		Color: Color(colorNumber),
 	}, nil
 }
 
@@ -131,7 +134,7 @@ func handleSetPixelColor(
 	c *websocket.Conn,
 	rdb *redis.Client,
 	appConfig *common.AppConfig,
-	matrix []string,
+	matrix []Color,
 	allConnections map[*websocket.Conn]struct{},
 ) bool {
 	pixel, err := argsToPixelInfo(wsMessage.Args)
@@ -151,7 +154,7 @@ func handleSetPixelColor(
 		return true
 	}
 
-	log.Printf("setPixelColor(x=%d, y=%d, color=%s)\n", pixel.X, pixel.Y, pixel.Color)
+	log.Printf("setPixelColor(x=%d, y=%d, color(code)=%d)\n", pixel.X, pixel.Y, pixel.Color)
 
 	matrix[pixel.Y*appConfig.CanvasCols+pixel.X] = pixel.Color
 
@@ -216,7 +219,7 @@ func handleConnectMe(
 	c *websocket.Conn,
 	rdb *redis.Client,
 	appConfig *common.AppConfig,
-	matrix []string,
+	matrix []Color,
 	allConnections map[*websocket.Conn]struct{},
 ) bool {
 	log.Printf("connectMe()\n")
@@ -295,7 +298,7 @@ func serve(
 	r *http.Request,
 	rdb *redis.Client,
 	appConfig *common.AppConfig,
-	matrix []string,
+	matrix []Color,
 	allConnections map[*websocket.Conn]struct{},
 ) {
 	upgraderConfig := websocket.Upgrader{
@@ -370,13 +373,13 @@ func main() {
 
 	// Allocate canvas matrix. Items are colors.
 	// In fact it is not real matrix, but 1-dimensional array.
-	matrix := make([]string, appConfig.CanvasRows*appConfig.CanvasCols)
+	matrix := make([]Color, appConfig.CanvasRows*appConfig.CanvasCols)
 	for y := 0; y < appConfig.CanvasRows; y++ {
 		for x := 0; x < appConfig.CanvasCols; x++ {
 			if (x+y)%2 == 0 {
-				matrix[y*appConfig.CanvasCols+x] = "gray"
+				matrix[y*appConfig.CanvasCols+x] = 0
 			} else {
-				matrix[y*appConfig.CanvasCols+x] = "white"
+				matrix[y*appConfig.CanvasCols+x] = 10
 			}
 		}
 	}

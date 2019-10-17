@@ -104,7 +104,7 @@ class Controller {
                     args: {
                         x: x,
                         y: y,
-                        color: this.paletteWidget.selectedColor,
+                        color: this.paletteWidget.selectedColorCode,
                     },
                 })
             );
@@ -114,8 +114,9 @@ class Controller {
     }
 
     handlePixelColorMessage(data) {
+        const colorName = this.paletteWidget.colorsList[data.color];
         this.canvasWrapper.setPixelColor(
-            data.x, data.y, data.color);
+            data.x, data.y, colorName);
     }
 
     handleAllPixelsColorsMessage(data) {
@@ -139,16 +140,17 @@ class PaletteWidget {
         this.tableDomElement = tableDomElement;
         this.colorsList = colorsList;
 
-        this.selectedColor = null;
+        // Actually this is index of color from colorsList
+        this.selectedColorCode = null;
     }
 
     fillPaletteTable() {
         const paletteRow = this.tableDomElement.insertRow(0);
-        for (let color of paletteConfig) {
+        for (let i = 0; i < this.colorsList.length; ++i) {
             const cell = paletteRow.insertCell(-1);
             cell.classList.add("palette-cell");
-            cell.style.backgroundColor = color;
-            cell.dataset.color = color;
+            cell.style.backgroundColor = this.colorsList[i];
+            cell.dataset.color = i.toString();
             cell.onclick = this.handleColorChoose;
         }
 
@@ -156,7 +158,7 @@ class PaletteWidget {
     }
 
     selectCell(selectedCell) {
-        this.selectedColor = selectedCell.dataset.color;
+        this.selectedColorCode = parseInt(selectedCell.dataset.color);
 
         const oldCells = this.tableDomElement.getElementsByClassName(
             "pallet-cell-selected");
