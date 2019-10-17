@@ -120,8 +120,16 @@ class Controller {
     }
 
     handleAllPixelsColorsMessage(data) {
-        for (let datum of data) {
-            this.handlePixelColorMessage(datum);
+        const colorsTable = this.paletteWidget.colorsList;
+        const totalRows = this.config["CanvasRows"];
+        const totalCols = this.config["CanvasCols"];
+
+        for (let y = 0; y < totalRows; ++y) {
+            for (let x = 0; x < totalCols; ++x) {
+                const colorCode = data[y * totalCols + x];
+                const colorName = colorsTable[colorCode];
+                this.canvasWrapper.setPixelColor(x, y, colorName);
+            }
         }
     }
 

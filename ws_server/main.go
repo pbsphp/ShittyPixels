@@ -31,6 +31,21 @@ import (
 // Color of pixel
 type Color uint8
 
+func (c *Color) UnmarshalJSON(b []byte) error {
+	var val int
+	err := json.Unmarshal(b, &val)
+	if err != nil {
+		return err
+	}
+	*c = Color(val)
+
+	return nil
+}
+
+func (c Color) MarshalJSON() ([]byte, error) {
+	return json.Marshal(int(c))
+}
+
 // Print error message with [ ERROR ] prefix and description.
 func logError(description string, err error) {
 	log.Println("[ ERROR ]: ", description, err)
@@ -56,9 +71,9 @@ type WebSocketResponseData struct {
 
 // Pixel representation for transfer: coords and color.
 type PixelInfo struct {
-	X     int    `json:"x"`
-	Y     int    `json:"y"`
-	Color Color  `json:"color"`
+	X     int   `json:"x"`
+	Y     int   `json:"y"`
+	Color Color `json:"color"`
 }
 
 // Is token present in Redis database
@@ -229,21 +244,9 @@ func handleConnectMe(
 		allConnections[c] = struct{}{}
 	}
 
-	pixelsData := make([]PixelInfo, appConfig.CanvasRows*appConfig.CanvasCols)
-	for y := 0; y < appConfig.CanvasRows; y++ {
-		for x := 0; x < appConfig.CanvasCols; x++ {
-			position := y*appConfig.CanvasCols + x
-			pixelsData[position] = PixelInfo{
-				X:     x,
-				Y:     y,
-				Color: matrix[position],
-			}
-		}
-	}
-
 	wsResponse := WebSocketResponseData{
 		Kind: "allPixelsColors",
-		Data: pixelsData,
+		Data: matrix,
 	}
 	response, err := json.Marshal(&wsResponse)
 	if err != nil {
