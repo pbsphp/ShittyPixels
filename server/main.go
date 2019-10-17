@@ -19,29 +19,15 @@
 package main
 
 import (
-	"encoding/json"
 	"github.com/go-redis/redis"
+	"github.com/pbsphp/ShittyPixels/common"
 	"golang.org/x/crypto/bcrypt"
 	"html/template"
 	"log"
 	"math/rand"
 	"net/http"
-	"os"
 	"time"
 )
-
-type AppConfig struct {
-	CanvasRows      int
-	CanvasCols      int
-	CooldownSeconds int
-	PaletteColors   []string
-
-	RedisAddress  string
-	RedisPassword string
-	RedisDatabase int
-
-	WebSocketAppAddr string
-}
 
 type UserData struct {
 	Login        string
@@ -70,52 +56,9 @@ func renderTemplate(w http.ResponseWriter, tmpl string, p interface{}) {
 	}
 }
 
-func mustReadAppConfig(path string) *AppConfig {
-	file, _ := os.Open(path)
-	defer func() {
-		if err := file.Close(); err != nil {
-			panic(err)
-		}
-	}()
-	decoder := json.NewDecoder(file)
-	config := AppConfig{}
-	if err := decoder.Decode(&config); err != nil {
-		panic(err)
-	}
-	return &config
-}
-
-func redisLoad(rdb *redis.Client, entity string, key string, rec interface{}) error {
-	rawVal, err := rdb.Get(entity + ":" + key).Result()
-	if err != nil {
-		return err
-	}
-
-	err = json.Unmarshal([]byte(rawVal), &rec)
-	if err != nil {
-		return err
-	}
-
-	return nil
-}
-
-func redisStore(rdb *redis.Client, entity string, key string, rec interface{}) error {
-	rawVal, err := json.Marshal(rec)
-	if err != nil {
-		return err
-	}
-
-	err = rdb.Set(entity+":"+key, rawVal, 0).Err()
-	if err != nil {
-		return err
-	}
-
-	return nil
-}
-
 func getUserByLogin(rdb *redis.Client, login string) (*UserData, error) {
 	var rec UserData
-	err := redisLoad(rdb, "User", login, &rec)
+	err := common.RedisLoad(rdb, "User", login, &rec)
 	if err == redis.Nil {
 		return nil, nil
 	}
@@ -127,12 +70,12 @@ func getUserByLogin(rdb *redis.Client, login string) (*UserData, error) {
 }
 
 func storeUser(rdb *redis.Client, user *UserData) error {
-	return redisStore(rdb, "User", user.Login, user)
+	return common.RedisStore(rdb, "User", user.Login, user)
 }
 
 func getSessionBySessionId(rdb *redis.Client, sessionId string) (*SessionData, error) {
 	var rec SessionData
-	err := redisLoad(rdb, "Session", sessionId, &rec)
+	err := common.RedisLoad(rdb, "Session", sessionId, &rec)
 	if err == redis.Nil {
 		return nil, nil
 	}
@@ -144,7 +87,7 @@ func getSessionBySessionId(rdb *redis.Client, sessionId string) (*SessionData, e
 }
 
 func storeSession(rdb *redis.Client, session *SessionData) error {
-	return redisStore(rdb, "Session", session.Id, session)
+	return common.RedisStore(rdb, "Session", session.Id, session)
 }
 
 func hashPassword(password string) (string, error) {
@@ -173,7 +116,7 @@ func indexHandler(
 	r *http.Request,
 	rdb *redis.Client,
 	session *SessionData,
-	appConfig *AppConfig,
+	appConfig *common.AppConfig,
 ) {
 	context := struct {
 		User string
@@ -189,7 +132,7 @@ func registerHandler(
 	r *http.Request,
 	rdb *redis.Client,
 	session *SessionData,
-	appConfig *AppConfig,
+	appConfig *common.AppConfig,
 ) {
 	if session.Login != "" {
 		http.Redirect(w, r, "/canvas", 302)
@@ -255,7 +198,7 @@ func loginHandler(
 	r *http.Request,
 	rdb *redis.Client,
 	session *SessionData,
-	appConfig *AppConfig,
+	appConfig *common.AppConfig,
 ) {
 	if session.Login != "" {
 		http.Redirect(w, r, "/canvas", 302)
@@ -312,7 +255,7 @@ func logoutHandler(
 	r *http.Request,
 	rdb *redis.Client,
 	session *SessionData,
-	appConfig *AppConfig,
+	appConfig *common.AppConfig,
 ) {
 	session.Login = ""
 	session.ValidationErrors = map[string]string{}
@@ -324,14 +267,14 @@ func canvasHandler(
 	r *http.Request,
 	rdb *redis.Client,
 	session *SessionData,
-	appConfig *AppConfig,
+	appConfig *common.AppConfig,
 ) {
 	if session.Login == "" {
 		http.Redirect(w, r, "/login", 302)
 	}
 
 	context := struct {
-		Config       *AppConfig
+		Config       *common.AppConfig
 		SessionToken string
 	}{
 		Config:       appConfig,
@@ -341,9 +284,9 @@ func canvasHandler(
 }
 
 func makeHandler(
-	fn func(w http.ResponseWriter, r *http.Request, rdb *redis.Client, session *SessionData, appConfig *AppConfig),
+	fn func(w http.ResponseWriter, r *http.Request, rdb *redis.Client, session *SessionData, appConfig *common.AppConfig),
 	rdb *redis.Client,
-	appConfig *AppConfig,
+	appConfig *common.AppConfig,
 ) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		cookie, err := r.Cookie("sessionId")
@@ -385,7 +328,7 @@ func makeHandler(
 func main() {
 	rand.Seed(time.Now().UnixNano())
 
-	appConfig := mustReadAppConfig("config.json")
+	appConfig := common.MustReadAppConfig("config.json")
 
 	rdb := redis.NewClient(&redis.Options{
 		Addr:     appConfig.RedisAddress,
