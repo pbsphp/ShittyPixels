@@ -29,17 +29,6 @@ import (
 	"time"
 )
 
-type UserData struct {
-	Login        string
-	PasswordHash string
-}
-
-type SessionData struct {
-	Login            string
-	Id               string
-	ValidationErrors map[string]string
-}
-
 var templates = template.Must(
 	template.ParseFiles(
 		"templates/index.html",
@@ -54,40 +43,6 @@ func renderTemplate(w http.ResponseWriter, tmpl string, p interface{}) {
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 	}
-}
-
-func getUserByLogin(rdb *redis.Client, login string) (*UserData, error) {
-	var rec UserData
-	err := common.RedisLoad(rdb, "User", login, &rec)
-	if err == redis.Nil {
-		return nil, nil
-	}
-	if err != nil {
-		return nil, err
-	}
-
-	return &rec, nil
-}
-
-func storeUser(rdb *redis.Client, user *UserData) error {
-	return common.RedisStore(rdb, "User", user.Login, user)
-}
-
-func getSessionBySessionId(rdb *redis.Client, sessionId string) (*SessionData, error) {
-	var rec SessionData
-	err := common.RedisLoad(rdb, "Session", sessionId, &rec)
-	if err == redis.Nil {
-		return nil, nil
-	}
-	if err != nil {
-		return nil, err
-	}
-
-	return &rec, nil
-}
-
-func storeSession(rdb *redis.Client, session *SessionData) error {
-	return common.RedisStore(rdb, "Session", session.Id, session)
 }
 
 func hashPassword(password string) (string, error) {
@@ -115,7 +70,7 @@ func indexHandler(
 	w http.ResponseWriter,
 	r *http.Request,
 	rdb *redis.Client,
-	session *SessionData,
+	session *common.SessionData,
 	appConfig *common.AppConfig,
 ) {
 	context := struct {
@@ -131,7 +86,7 @@ func registerHandler(
 	w http.ResponseWriter,
 	r *http.Request,
 	rdb *redis.Client,
-	session *SessionData,
+	session *common.SessionData,
 	appConfig *common.AppConfig,
 ) {
 	if session.Login != "" {
@@ -145,7 +100,7 @@ func registerHandler(
 		validationErrors := make(map[string]string)
 		isValid := true
 
-		user, err := getUserByLogin(rdb, login)
+		user, err := common.GetUserByLogin(rdb, login)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
@@ -170,7 +125,7 @@ func registerHandler(
 				return
 			}
 
-			err = storeUser(rdb, &UserData{
+			err = common.StoreUser(rdb, &common.UserData{
 				Login:        login,
 				PasswordHash: passHash,
 			})
@@ -197,7 +152,7 @@ func loginHandler(
 	w http.ResponseWriter,
 	r *http.Request,
 	rdb *redis.Client,
-	session *SessionData,
+	session *common.SessionData,
 	appConfig *common.AppConfig,
 ) {
 	if session.Login != "" {
@@ -211,7 +166,7 @@ func loginHandler(
 		validationErrors := make(map[string]string)
 		isValid := true
 
-		user, err := getUserByLogin(rdb, login)
+		user, err := common.GetUserByLogin(rdb, login)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
@@ -254,7 +209,7 @@ func logoutHandler(
 	w http.ResponseWriter,
 	r *http.Request,
 	rdb *redis.Client,
-	session *SessionData,
+	session *common.SessionData,
 	appConfig *common.AppConfig,
 ) {
 	session.Login = ""
@@ -266,7 +221,7 @@ func canvasHandler(
 	w http.ResponseWriter,
 	r *http.Request,
 	rdb *redis.Client,
-	session *SessionData,
+	session *common.SessionData,
 	appConfig *common.AppConfig,
 ) {
 	if session.Login == "" {
@@ -284,7 +239,7 @@ func canvasHandler(
 }
 
 func makeHandler(
-	fn func(w http.ResponseWriter, r *http.Request, rdb *redis.Client, session *SessionData, appConfig *common.AppConfig),
+	fn func(w http.ResponseWriter, r *http.Request, rdb *redis.Client, session *common.SessionData, appConfig *common.AppConfig),
 	rdb *redis.Client,
 	appConfig *common.AppConfig,
 ) http.HandlerFunc {
@@ -294,16 +249,16 @@ func makeHandler(
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
-		var session *SessionData
+		var session *common.SessionData
 		if cookie != nil {
-			session, err = getSessionBySessionId(rdb, cookie.Value)
+			session, err = common.GetSessionBySessionId(rdb, cookie.Value)
 			if err != nil {
 				http.Error(w, err.Error(), http.StatusInternalServerError)
 				return
 			}
 		}
 		if session == nil {
-			session = &SessionData{
+			session = &common.SessionData{
 				Login:            "",
 				Id:               generateSessionToken(),
 				ValidationErrors: make(map[string]string),
@@ -317,7 +272,7 @@ func makeHandler(
 
 		fn(w, r, rdb, session, appConfig)
 
-		err = storeSession(rdb, session)
+		err = common.StoreSession(rdb, session)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return

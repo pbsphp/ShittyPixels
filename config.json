@@ -1,6 +1,6 @@
 {
-    "CanvasRows": 50,
-    "CanvasCols": 100,
+    "CanvasRows": 512,
+    "CanvasCols": 128,
     "CooldownSeconds": 5,
 
     "PaletteColors": [
