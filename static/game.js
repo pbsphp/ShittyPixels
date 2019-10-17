@@ -47,8 +47,8 @@ class Controller {
 
         this.canvasWrapper = new CanvasWrapper(canvas);
         canvas.onclick = this.handleCanvasClick;
-        canvas.width = config["CanvasRows"] * PIXEL_SIZE;
-        canvas.height = config["CanvasCols"] * PIXEL_SIZE;
+        canvas.width = config["CanvasCols"] * PIXEL_SIZE;
+        canvas.height = config["CanvasRows"] * PIXEL_SIZE;
 
         this.sock = new WebSocket(config["WebSocketAppAddr"]);
         this.sock.onmessage = this.handleMessage;
