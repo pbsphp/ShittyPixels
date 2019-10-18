@@ -24,8 +24,12 @@ import (
 	"github.com/go-redis/redis"
 	"github.com/gorilla/websocket"
 	"github.com/pbsphp/ShittyPixels/common"
+	"golang.org/x/image/colornames"
+	"image/color"
+	"image/png"
 	"log"
 	"net/http"
+	"os"
 )
 
 // Color of pixel
@@ -124,6 +128,82 @@ func argsToPixelInfo(args map[string]interface{}) (*PixelInfo, error) {
 // If websocket connection is closed, it's OK. Do not log it.
 func isWsClosedOk(err error) bool {
 	return websocket.IsCloseError(err, websocket.CloseGoingAway, websocket.CloseNormalClosure)
+}
+
+// Read PNG image and draw it on the matrix using closest available color.
+// Panic on failure.
+func MustDrawInitialImage(path string, matrix []Color, palette []string, canvasHeight int, canvasWidth int) {
+	checkError := func(err error) {
+		if err != nil {
+			panic(err)
+		}
+	}
+
+	pow2 := func(x float32) float32 {
+		return x * x
+	}
+
+	// Transform palette with color names to RGBA
+	paletteRGBA := make([]color.RGBA, len(palette))
+	for i, colorName := range palette {
+		paletteRGBA[i] = colornames.Map[colorName]
+	}
+
+	// Return index of palette color closest to given RGB color.
+	// Distance formula is: (0.3(R1 - R2))^2 + (0.59(G1 - G2))^2 + (0.11(B1 - B2))^2.
+	// See https://stackoverflow.com/a/1847112.
+	getClosestColor := func(first color.RGBA) Color {
+		var minDistance float32
+		var minDistanceColorIndex int
+		for i, second := range paletteRGBA {
+			dist := pow2((float32(first.R)-float32(second.R))*0.3) +
+				pow2((float32(first.G)-float32(second.G))*0.59) +
+				pow2((float32(first.B)-float32(second.B))*0.11)
+
+			if i == 0 || dist < minDistance {
+				minDistance = dist
+				minDistanceColorIndex = i
+			}
+		}
+		return Color(minDistanceColorIndex)
+	}
+
+	f, err := os.Open(path)
+	checkError(err)
+	defer func() {
+		checkError(f.Close())
+	}()
+
+	img, err := png.Decode(f)
+	checkError(err)
+
+	imgWidth := img.Bounds().Max.X - img.Bounds().Min.X
+	imgHeight := img.Bounds().Max.Y - img.Bounds().Min.Y
+
+	repeatX := (canvasWidth + imgWidth - 1) / imgWidth
+	repeatY := (canvasHeight + imgHeight - 1) / imgHeight
+
+	// TODO: Rewrite this loops.
+	for rY := 0; rY < repeatY; rY++ {
+		for rX := 0; rX < repeatX; rX++ {
+			for y := 0; y < imgHeight; y++ {
+				imgY := y + img.Bounds().Min.Y
+				matrixY := rY*imgHeight + y
+				for x := 0; x < imgWidth; x++ {
+					imgX := x + img.Bounds().Min.X
+					matrixX := rX*imgWidth + x
+
+					if imgX < img.Bounds().Max.X &&
+						imgY < img.Bounds().Max.Y &&
+						matrixX < canvasWidth &&
+						matrixY < canvasHeight {
+						imgColor := color.RGBAModel.Convert(img.At(imgX, imgY)).(color.RGBA)
+						matrix[matrixY*canvasWidth+matrixX] = getClosestColor(imgColor)
+					}
+				}
+			}
+		}
+	}
 }
 
 // Handle setPixelColor method.
@@ -377,15 +457,14 @@ func main() {
 	// Allocate canvas matrix. Items are colors.
 	// In fact it is not real matrix, but 1-dimensional array.
 	matrix := make([]Color, appConfig.CanvasRows*appConfig.CanvasCols)
-	for y := 0; y < appConfig.CanvasRows; y++ {
-		for x := 0; x < appConfig.CanvasCols; x++ {
-			if (x+y)%2 == 0 {
-				matrix[y*appConfig.CanvasCols+x] = 0
-			} else {
-				matrix[y*appConfig.CanvasCols+x] = 10
-			}
-		}
-	}
+
+	MustDrawInitialImage(
+		appConfig.InitialImage,
+		matrix,
+		appConfig.PaletteColors,
+		appConfig.CanvasRows,
+		appConfig.CanvasCols,
+	)
 
 	// Redis connection. Redis stores session info and cooldowns.
 	rdb := redis.NewClient(&redis.Options{

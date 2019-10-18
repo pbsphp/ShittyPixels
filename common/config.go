@@ -27,7 +27,9 @@ type AppConfig struct {
 	CanvasRows      int
 	CanvasCols      int
 	CooldownSeconds int
-	PaletteColors   []string
+
+	PaletteColors []string
+	InitialImage  string
 
 	RedisAddress  string
 	RedisPassword string

@@ -4,18 +4,25 @@
     "CooldownSeconds": 5,
 
     "PaletteColors": [
+        "gray",
         "black",
-        "white",
-        "brown",
-        "green",
-        "yellow",
-        "blue",
-        "orange",
-        "cyan",
+        "maroon",
         "red",
-        "violet",
-        "gray"
+        "green",
+        "lime",
+        "olive",
+        "yellow",
+        "navy",
+        "blue",
+        "purple",
+        "fuchsia",
+        "teal",
+        "aqua",
+        "silver",
+        "white"
     ],
+
+    "InitialImage": "./gopher.png",
 
     "RedisAddr": "localhost:6379",
     "RedisPassword": "",
