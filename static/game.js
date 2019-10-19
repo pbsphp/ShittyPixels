@@ -50,9 +50,13 @@ class Controller {
         canvas.width = config["CanvasCols"] * PIXEL_SIZE;
         canvas.height = config["CanvasRows"] * PIXEL_SIZE;
 
-        this.sock = new WebSocket(config["WebSocketAppAddr"]);
-        this.sock.onmessage = this.handleMessage;
-        this.sock.onopen = this.connect;
+        this.connections = [];
+        for (let addr of config["WebSocketAppAddresses"]) {
+            const conn = new WebSocket(addr);
+            conn.onmessage = this.handleMessage;
+            conn.onopen = () => this.connect(conn);
+            this.connections.push(conn);
+        }
 
         this.paletteWidget = paletteWidget;
         this.timerWidget = timerWidget;
@@ -61,8 +65,8 @@ class Controller {
         this.config = config;
     }
 
-    connect() {
-        this.sock.send(
+    connect(conn) {
+        conn.send(
             JSON.stringify({
                 method: "connectMe",
                 sessionToken: this.sessionToken,
@@ -97,7 +101,10 @@ class Controller {
             const x = Math.floor(realX / PIXEL_SIZE);
             const y = Math.floor(realY / PIXEL_SIZE);
 
-            this.sock.send(
+            const connIndex = x % this.connections.length;
+            const conn = this.connections[connIndex];
+
+            conn.send(
                 JSON.stringify({
                     method: "setPixelColor",
                     sessionToken: this.sessionToken,
@@ -124,11 +131,15 @@ class Controller {
         const totalRows = this.config["CanvasRows"];
         const totalCols = this.config["CanvasCols"];
 
+        const colors = data["colorCodes"];
+        const offset = data["offset"];
+        const eachNth = data["eachNth"];
+
         for (let y = 0; y < totalRows; ++y) {
-            for (let x = 0; x < totalCols; ++x) {
-                const colorCode = data[y * totalCols + x];
+            for (let x = 0; x < totalCols / eachNth; ++x) {
+                const colorCode = colors[y * totalCols + x];
                 const colorName = colorsTable[colorCode];
-                this.canvasWrapper.setPixelColor(x, y, colorName);
+                this.canvasWrapper.setPixelColor(x * eachNth + offset, y, colorName);
             }
         }
     }

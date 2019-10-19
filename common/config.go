@@ -35,7 +35,7 @@ type AppConfig struct {
 	RedisPassword string
 	RedisDatabase int
 
-	WebSocketAppAddr string
+	WebSocketAppAddresses []string
 }
 
 // Read configuration file. Panic on error

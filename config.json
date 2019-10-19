@@ -28,5 +28,9 @@
     "RedisPassword": "",
     "RedisDatabase": 0,
 
-    "WebSocketAppAddr": "ws://localhost:8765/"
+    "WebSocketAppAddresses": [
+        "ws://localhost:12345/",
+        "ws://localhost:12346/",
+        "ws://localhost:12347/"
+    ]
 }

@@ -22,6 +22,12 @@
                 {{end}}
             ];
 
+            const webSocketInstances = [
+                {{range $instance := .Config.WebSocketAppAddresses}}
+                    "{{$instance}}",
+                {{end}}
+            ];
+
             const paletteTable = document.getElementById("palette-table");
             const paletteWidget = new PaletteWidget(paletteTable, paletteConfig);
             paletteWidget.fillPaletteTable();
@@ -35,7 +41,7 @@
                     CanvasRows: {{.Config.CanvasRows}},
                     CanvasCols: {{.Config.CanvasCols}},
                     CooldownSeconds: {{.Config.CooldownSeconds}},
-                    WebSocketAppAddr: "{{.Config.WebSocketAppAddr}}",
+                    WebSocketAppAddresses: webSocketInstances,
                 },
                 "{{.SessionToken}}",
                 canvas,

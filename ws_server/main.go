@@ -21,6 +21,7 @@ package main
 import (
 	"encoding/json"
 	"errors"
+	"flag"
 	"github.com/go-redis/redis"
 	"github.com/gorilla/websocket"
 	"github.com/pbsphp/ShittyPixels/common"
@@ -132,7 +133,15 @@ func isWsClosedOk(err error) bool {
 
 // Read PNG image and draw it on the matrix using closest available color.
 // Panic on failure.
-func MustDrawInitialImage(path string, matrix []Color, palette []string, canvasHeight int, canvasWidth int) {
+func MustDrawInitialImage(
+	path string,
+	matrix []Color,
+	palette []string,
+	canvasHeight int,
+	canvasWidth int,
+	instanceNumber int,
+	totalInstances int,
+) {
 	checkError := func(err error) {
 		if err != nil {
 			panic(err)
@@ -191,6 +200,7 @@ func MustDrawInitialImage(path string, matrix []Color, palette []string, canvasH
 				matrixY := rY*imgHeight + y
 				for x := 0; x < imgWidth; x++ {
 					imgX := x + img.Bounds().Min.X
+					imgX = imgX*totalInstances + instanceNumber
 					matrixX := rX*imgWidth + x
 
 					if imgX < img.Bounds().Max.X &&
@@ -231,11 +241,19 @@ func handleSetPixelColor(
 	appConfig *common.AppConfig,
 	matrix []Color,
 	allConnections map[*websocket.Conn]struct{},
+	instanceNumber int,
+	totalInstances int,
 ) bool {
 	pixel, err := argsToPixelInfo(wsMessage.Args)
 	if err != nil {
 		// Problems with user data. Just ignore.
 		logError("unmarshal (data)", err)
+		return true
+	}
+
+	if pixel.X%totalInstances != instanceNumber {
+		// This pixel is managed by other worker.
+		// Ignore request.
 		return true
 	}
 
@@ -251,7 +269,8 @@ func handleSetPixelColor(
 
 	log.Printf("setPixelColor(x=%d, y=%d, color(code)=%d)\n", pixel.X, pixel.Y, pixel.Color)
 
-	matrix[pixel.Y*appConfig.CanvasCols+pixel.X] = pixel.Color
+	matrixIndex := pixel.Y*appConfig.CanvasCols + pixel.X/totalInstances
+	matrix[matrixIndex] = pixel.Color
 
 	wsResponse := WebSocketResponseData{
 		Kind: "pixelColor",
@@ -316,6 +335,8 @@ func handleConnectMe(
 	appConfig *common.AppConfig,
 	matrix []Color,
 	allConnections map[*websocket.Conn]struct{},
+	instanceNumber int,
+	totalInstances int,
 ) bool {
 	log.Printf("connectMe()\n")
 
@@ -326,7 +347,15 @@ func handleConnectMe(
 
 	wsResponse := WebSocketResponseData{
 		Kind: "allPixelsColors",
-		Data: matrix,
+		Data: struct {
+			ColorCodes []Color `json:"colorCodes"`
+			Offset     int     `json:"offset"`
+			EachNth    int     `json:"eachNth"`
+		}{
+			ColorCodes: matrix,
+			Offset:     instanceNumber,
+			EachNth:    totalInstances,
+		},
 	}
 	response, err := json.Marshal(&wsResponse)
 	if err != nil {
@@ -383,6 +412,8 @@ func serve(
 	appConfig *common.AppConfig,
 	matrix []Color,
 	allConnections map[*websocket.Conn]struct{},
+	instanceNumber int,
+	totalInstances int,
 ) {
 	upgraderConfig := websocket.Upgrader{
 		// Do not check origin. Allow all incoming connections. CSRFs are welcome.
@@ -433,9 +464,29 @@ func serve(
 		ok := true
 		switch wsMessage.Method {
 		case "setPixelColor":
-			ok = handleSetPixelColor(&wsMessage, mt, c, rdb, appConfig, matrix, allConnections)
+			ok = handleSetPixelColor(
+				&wsMessage,
+				mt,
+				c,
+				rdb,
+				appConfig,
+				matrix,
+				allConnections,
+				instanceNumber,
+				totalInstances,
+			)
 		case "connectMe":
-			ok = handleConnectMe(&wsMessage, mt, c, rdb, appConfig, matrix, allConnections)
+			ok = handleConnectMe(
+				&wsMessage,
+				mt,
+				c,
+				rdb,
+				appConfig,
+				matrix,
+				allConnections,
+				instanceNumber,
+				totalInstances,
+			)
 		default:
 			logError("unsupported method", nil)
 		}
@@ -447,7 +498,21 @@ func serve(
 }
 
 func main() {
+	instanceNumberFlag := flag.Int("n", -1, "instance number")
+	listenAddressFlag := flag.String("listen", "", "address to listen")
+	flag.Parse()
+
 	appConfig := common.MustReadAppConfig("config.json")
+
+	instanceNumber := *instanceNumberFlag
+	totalInstances := len(appConfig.WebSocketAppAddresses)
+	if instanceNumber < 0 || instanceNumber > totalInstances {
+		panic("provide -n=x argument (0 <= x < len(WebSocketAppAddresses))")
+	}
+	listenAddress := *listenAddressFlag
+	if listenAddress == "" {
+		panic("provide -listen=[host]:port")
+	}
 
 	// List of all connections.
 	// We store all websocket connections with active users. When someone has changed pixel color we iterate over
@@ -464,6 +529,8 @@ func main() {
 		appConfig.PaletteColors,
 		appConfig.CanvasRows,
 		appConfig.CanvasCols,
+		instanceNumber,
+		totalInstances,
 	)
 
 	// Redis connection. Redis stores session info and cooldowns.
@@ -478,7 +545,7 @@ func main() {
 	}
 
 	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		serve(w, r, rdb, appConfig, matrix, allConnections)
+		serve(w, r, rdb, appConfig, matrix, allConnections, instanceNumber, totalInstances)
 	})
-	log.Fatal(http.ListenAndServe(":8765", nil))
+	log.Fatal(http.ListenAndServe(listenAddress, nil))
 }
