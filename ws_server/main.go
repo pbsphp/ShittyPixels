@@ -56,6 +56,53 @@ func logError(description string, err error) {
 	log.Println("[ ERROR ]: ", description, err)
 }
 
+type Matrix struct {
+	// Array of colors. Only pixels belonging to this instance.
+	// So len(Data) < Width * Height!
+	Data []Color
+	// Total width of canvas.
+	Width int
+	// Total height of canvas.
+	Height int
+
+	instanceNumber int
+	totalInstances int
+}
+
+func NewMatrix(width, height, instanceNumber, totalInstances int) Matrix {
+	instanceWidth := (width + totalInstances - 1) / totalInstances
+	return Matrix{
+		Data:           make([]Color, instanceWidth*height),
+		Width:          width,
+		Height:         height,
+		instanceNumber: instanceNumber,
+		totalInstances: totalInstances,
+	}
+}
+
+func (m *Matrix) Get(x, y int) (Color, bool) {
+	if x%m.totalInstances != m.instanceNumber {
+		return 0, false
+	}
+
+	instanceX := x / m.totalInstances
+	instanceWidth := (m.Width + m.totalInstances - 1) / m.totalInstances
+
+	return m.Data[y*instanceWidth+instanceX], true
+}
+
+func (m *Matrix) Set(x, y int, val Color) bool {
+	if x%m.totalInstances != m.instanceNumber {
+		return false
+	}
+
+	instanceX := x / m.totalInstances
+	instanceWidth := (m.Width + m.totalInstances - 1) / m.totalInstances
+
+	m.Data[y*instanceWidth+instanceX] = val
+	return true
+}
+
 // Client request should be JSON with:
 // method -- method name ("setPixelColor" for example).
 // args -- additional args for method (may be nil). Different schema for each method.
@@ -135,10 +182,8 @@ func isWsClosedOk(err error) bool {
 // Panic on failure.
 func MustDrawInitialImage(
 	path string,
-	matrix []Color,
+	matrix *Matrix,
 	palette []string,
-	canvasHeight int,
-	canvasWidth int,
 	instanceNumber int,
 	totalInstances int,
 ) {
@@ -188,6 +233,8 @@ func MustDrawInitialImage(
 
 	imgWidth := img.Bounds().Max.X - img.Bounds().Min.X
 	imgHeight := img.Bounds().Max.Y - img.Bounds().Min.Y
+	canvasWidth := matrix.Width
+	canvasHeight := matrix.Height
 
 	repeatX := (canvasWidth + imgWidth - 1) / imgWidth
 	repeatY := (canvasHeight + imgHeight - 1) / imgHeight
@@ -198,9 +245,8 @@ func MustDrawInitialImage(
 			for y := 0; y < imgHeight; y++ {
 				imgY := y + img.Bounds().Min.Y
 				matrixY := rY*imgHeight + y
-				for x := 0; x < imgWidth; x++ {
+				for x := instanceNumber; x < imgWidth; x += totalInstances {
 					imgX := x + img.Bounds().Min.X
-					imgX = imgX*totalInstances + instanceNumber
 					matrixX := rX*imgWidth + x
 
 					if imgX < img.Bounds().Max.X &&
@@ -208,12 +254,86 @@ func MustDrawInitialImage(
 						matrixX < canvasWidth &&
 						matrixY < canvasHeight {
 						imgColor := color.RGBAModel.Convert(img.At(imgX, imgY)).(color.RGBA)
-						matrix[matrixY*canvasWidth+matrixX] = getClosestColor(imgColor)
+						ok := matrix.Set(matrixX, matrixY, getClosestColor(imgColor))
+						if !ok {
+							// Expected to be unreachable.
+							panic("initial picture drawing failed (unreachable code)")
+						}
 					}
 				}
 			}
 		}
 	}
+}
+
+type WebSocketHandler struct {
+	rdb            *redis.Client
+	appConfig      *common.AppConfig
+	upgraderConfig websocket.Upgrader
+
+	allConnections map[*websocket.Conn]struct{}
+	matrix         *Matrix
+
+	instanceNumber int
+	totalInstances int
+}
+
+func (h *WebSocketHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	c, err := h.upgraderConfig.Upgrade(w, r, nil)
+	if err != nil {
+		logError("upgrade", err)
+		return
+	}
+	defer func() {
+		if err := c.Close(); err != nil {
+			logError("close connection", err)
+		}
+	}()
+
+	for {
+		mt, message, err := c.ReadMessage()
+		if err != nil {
+			if !isWsClosedOk(err) {
+				logError("read", err)
+			}
+			delete(h.allConnections, c)
+			return
+		}
+
+		wsMessage := WebSocketRequestData{}
+		err = json.Unmarshal(message, &wsMessage)
+		if err != nil {
+			logError("unmarshal", err)
+			continue
+		}
+
+		// Check that user is authenticated (session has Login)
+		// Check that user logged in (has active session with login)
+		session, err := common.GetSessionBySessionId(h.rdb, wsMessage.SessionToken)
+		if err != nil {
+			logError("get session info", err)
+			continue
+		}
+		if session == nil || session.Login == "" {
+			// Cheating? Ignore request.
+			continue
+		}
+
+		ok := true
+		switch wsMessage.Method {
+		case "setPixelColor":
+			ok = h.handleSetPixelColor(&wsMessage, mt, c)
+		case "connectMe":
+			ok = h.handleConnectMe(&wsMessage, mt, c)
+		default:
+			logError("unsupported method", nil)
+		}
+
+		if !ok {
+			return
+		}
+	}
+
 }
 
 // Handle setPixelColor method.
@@ -233,17 +353,7 @@ func MustDrawInitialImage(
 //     "kind": "pixelColor",
 //     "data": { (same) }
 // }
-func handleSetPixelColor(
-	wsMessage *WebSocketRequestData,
-	mt int,
-	c *websocket.Conn,
-	rdb *redis.Client,
-	appConfig *common.AppConfig,
-	matrix []Color,
-	allConnections map[*websocket.Conn]struct{},
-	instanceNumber int,
-	totalInstances int,
-) bool {
+func (h *WebSocketHandler) handleSetPixelColor(wsMessage *WebSocketRequestData, mt int, c *websocket.Conn) bool {
 	pixel, err := argsToPixelInfo(wsMessage.Args)
 	if err != nil {
 		// Problems with user data. Just ignore.
@@ -251,13 +361,7 @@ func handleSetPixelColor(
 		return true
 	}
 
-	if pixel.X%totalInstances != instanceNumber {
-		// This pixel is managed by other worker.
-		// Ignore request.
-		return true
-	}
-
-	err, hasOldCooldown := common.TestAndUpdateSessionCooldown(rdb, appConfig, wsMessage.SessionToken)
+	err, hasOldCooldown := common.TestAndUpdateSessionCooldown(h.rdb, h.appConfig, wsMessage.SessionToken)
 	if err != nil {
 		logError("update redis cooldown", err)
 		return true
@@ -267,10 +371,14 @@ func handleSetPixelColor(
 		return true
 	}
 
-	log.Printf("setPixelColor(x=%d, y=%d, color(code)=%d)\n", pixel.X, pixel.Y, pixel.Color)
+	ok := h.matrix.Set(pixel.X, pixel.Y, pixel.Color)
+	if !ok {
+		// This pixel is managed by other worker.
+		// Ignore request.
+		return true
+	}
 
-	matrixIndex := pixel.Y*appConfig.CanvasCols + pixel.X/totalInstances
-	matrix[matrixIndex] = pixel.Color
+	log.Printf("setPixelColor(x=%d, y=%d, color(code)=%d)\n", pixel.X, pixel.Y, pixel.Color)
 
 	wsResponse := WebSocketResponseData{
 		Kind: "pixelColor",
@@ -285,7 +393,7 @@ func handleSetPixelColor(
 	// Notify all connections.
 	// Also collect invalid connections and remove them from `allConnections' list.
 	invalidConnections := make([]*websocket.Conn, 0, 1)
-	for conn := range allConnections {
+	for conn := range h.allConnections {
 		err = conn.WriteMessage(mt, response)
 		if err != nil {
 			if !isWsClosedOk(err) {
@@ -297,7 +405,7 @@ func handleSetPixelColor(
 
 	isCurrentConnectionInvalid := false
 	for _, conn := range invalidConnections {
-		delete(allConnections, conn)
+		delete(h.allConnections, conn)
 
 		if conn == c {
 			isCurrentConnectionInvalid = true
@@ -321,28 +429,17 @@ func handleSetPixelColor(
 // {
 //     "kind": "allPixelsColors",
 //     "data": [
-//         {
-//             "x": 0, "y": 0, "color": <(0;0) pixel color>
-//         },
-//         ... (for each pixel)
+//         pixelColor,
+//         anotherPixelColor,
+// 		   ...
 //     ]
 // }
-func handleConnectMe(
-	wsMessage *WebSocketRequestData,
-	mt int,
-	c *websocket.Conn,
-	rdb *redis.Client,
-	appConfig *common.AppConfig,
-	matrix []Color,
-	allConnections map[*websocket.Conn]struct{},
-	instanceNumber int,
-	totalInstances int,
-) bool {
+func (h *WebSocketHandler) handleConnectMe(wsMessage *WebSocketRequestData, mt int, c *websocket.Conn) bool {
 	log.Printf("connectMe()\n")
 
-	_, ok := allConnections[c]
+	_, ok := h.allConnections[c]
 	if !ok {
-		allConnections[c] = struct{}{}
+		h.allConnections[c] = struct{}{}
 	}
 
 	wsResponse := WebSocketResponseData{
@@ -352,9 +449,9 @@ func handleConnectMe(
 			Offset     int     `json:"offset"`
 			EachNth    int     `json:"eachNth"`
 		}{
-			ColorCodes: matrix,
-			Offset:     instanceNumber,
-			EachNth:    totalInstances,
+			ColorCodes: h.matrix.Data,
+			Offset:     h.instanceNumber,
+			EachNth:    h.totalInstances,
 		},
 	}
 	response, err := json.Marshal(&wsResponse)
@@ -366,7 +463,7 @@ func handleConnectMe(
 	err = c.WriteMessage(mt, response)
 	if err != nil {
 		if isWsClosedOk(err) {
-			delete(allConnections, c)
+			delete(h.allConnections, c)
 		} else {
 			logError("read", err)
 		}
@@ -374,7 +471,7 @@ func handleConnectMe(
 	}
 
 	// Also send cooldown info (if present)
-	cooldown, err := common.GetSessionCooldownBySessionId(rdb, wsMessage.SessionToken)
+	cooldown, err := common.GetSessionCooldownBySessionId(h.rdb, wsMessage.SessionToken)
 	if err != nil {
 		logError("redis read cooldown", err)
 		return false
@@ -393,7 +490,7 @@ func handleConnectMe(
 		err = c.WriteMessage(mt, response)
 		if err != nil {
 			if isWsClosedOk(err) {
-				delete(allConnections, c)
+				delete(h.allConnections, c)
 			} else {
 				logError("read", err)
 			}
@@ -402,99 +499,6 @@ func handleConnectMe(
 	}
 
 	return true
-}
-
-// Handle client requests.
-func serve(
-	w http.ResponseWriter,
-	r *http.Request,
-	rdb *redis.Client,
-	appConfig *common.AppConfig,
-	matrix []Color,
-	allConnections map[*websocket.Conn]struct{},
-	instanceNumber int,
-	totalInstances int,
-) {
-	upgraderConfig := websocket.Upgrader{
-		// Do not check origin. Allow all incoming connections. CSRFs are welcome.
-		// TODO: Check origin by wildcard. E.g. instance-*.example.com:8765.
-		CheckOrigin: func(r *http.Request) bool { return true },
-	}
-	c, err := upgraderConfig.Upgrade(w, r, nil)
-	if err != nil {
-		logError("upgrade", err)
-		return
-	}
-	defer func() {
-		err := c.Close()
-		if err != nil {
-			logError("close connection", err)
-		}
-	}()
-
-	for {
-		mt, message, err := c.ReadMessage()
-		if err != nil {
-			if !isWsClosedOk(err) {
-				logError("read", err)
-			}
-			delete(allConnections, c)
-			return
-		}
-
-		wsMessage := WebSocketRequestData{}
-		err = json.Unmarshal(message, &wsMessage)
-		if err != nil {
-			logError("unmarshal", err)
-			continue
-		}
-
-		// Check that user is authenticated (session has Login)
-		// Check that user logged in (has active session with login)
-		session, err := common.GetSessionBySessionId(rdb, wsMessage.SessionToken)
-		if err != nil {
-			logError("get session info", err)
-			continue
-		}
-		if session == nil || session.Login == "" {
-			// Cheating? Ignore request.
-			continue
-		}
-
-		ok := true
-		switch wsMessage.Method {
-		case "setPixelColor":
-			ok = handleSetPixelColor(
-				&wsMessage,
-				mt,
-				c,
-				rdb,
-				appConfig,
-				matrix,
-				allConnections,
-				instanceNumber,
-				totalInstances,
-			)
-		case "connectMe":
-			ok = handleConnectMe(
-				&wsMessage,
-				mt,
-				c,
-				rdb,
-				appConfig,
-				matrix,
-				allConnections,
-				instanceNumber,
-				totalInstances,
-			)
-		default:
-			logError("unsupported method", nil)
-		}
-
-		if !ok {
-			return
-		}
-	}
 }
 
 func main() {
@@ -520,15 +524,12 @@ func main() {
 	allConnections := make(map[*websocket.Conn]struct{})
 
 	// Allocate canvas matrix. Items are colors.
-	// In fact it is not real matrix, but 1-dimensional array.
-	matrix := make([]Color, appConfig.CanvasRows*appConfig.CanvasCols)
+	matrix := NewMatrix(appConfig.CanvasCols, appConfig.CanvasRows, instanceNumber, totalInstances)
 
 	MustDrawInitialImage(
 		appConfig.InitialImage,
-		matrix,
+		&matrix,
 		appConfig.PaletteColors,
-		appConfig.CanvasRows,
-		appConfig.CanvasCols,
 		instanceNumber,
 		totalInstances,
 	)
@@ -544,8 +545,24 @@ func main() {
 		log.Fatal("cannot connect to redis server", err)
 	}
 
-	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		serve(w, r, rdb, appConfig, matrix, allConnections, instanceNumber, totalInstances)
-	})
+	upgraderConfig := websocket.Upgrader{
+		// Do not check origin. Allow all incoming connections. CSRFs are welcome.
+		// TODO: Check origin by wildcard. E.g. instance-*.example.com:8765.
+		CheckOrigin: func(r *http.Request) bool { return true },
+	}
+
+	handler := WebSocketHandler{
+		rdb:            rdb,
+		appConfig:      appConfig,
+		upgraderConfig: upgraderConfig,
+
+		allConnections: allConnections,
+		matrix:         &matrix,
+
+		instanceNumber: instanceNumber,
+		totalInstances: totalInstances,
+	}
+
+	http.Handle("/", &handler)
 	log.Fatal(http.ListenAndServe(listenAddress, nil))
 }

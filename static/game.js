@@ -128,18 +128,24 @@ class Controller {
 
     handleAllPixelsColorsMessage(data) {
         const colorsTable = this.paletteWidget.colorsList;
-        const totalRows = this.config["CanvasRows"];
-        const totalCols = this.config["CanvasCols"];
 
-        const colors = data["colorCodes"];
+        const totalWidth = this.config["CanvasCols"];
+        const totalHeight = this.config["CanvasRows"];
+
+        const matrix = data["colorCodes"];
         const offset = data["offset"];
         const eachNth = data["eachNth"];
 
-        for (let y = 0; y < totalRows; ++y) {
-            for (let x = 0; x < totalCols / eachNth; ++x) {
-                const colorCode = colors[y * totalCols + x];
-                const colorName = colorsTable[colorCode];
-                this.canvasWrapper.setPixelColor(x * eachNth + offset, y, colorName);
+        const instanceWidth = Math.ceil(totalWidth / eachNth);
+
+        for (let y = 0; y < totalHeight; ++y) {
+            for (let instanceX = 0; instanceX < instanceWidth; ++instanceX) {
+                const x = instanceX * eachNth + offset;
+                if (x < totalWidth) {
+                    const colorCode = matrix[y * instanceWidth + instanceX];
+                    const colorName = colorsTable[colorCode];
+                    this.canvasWrapper.setPixelColor(x, y, colorName);
+                }
             }
         }
     }
