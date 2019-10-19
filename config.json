@@ -28,6 +28,8 @@
     "RedisPassword": "",
     "RedisDatabase": 0,
 
+    "AllowedOrigins": "^https?://localhost(:[0-9]+)?.*",
+
     "WebSocketAppAddresses": [
         "ws://localhost:12345/",
         "ws://localhost:12346/",

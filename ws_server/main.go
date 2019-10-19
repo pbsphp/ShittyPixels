@@ -31,6 +31,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"regexp"
 )
 
 // Color of pixel
@@ -545,10 +546,15 @@ func main() {
 		log.Fatal("cannot connect to redis server", err)
 	}
 
+	allowedOriginPattern := regexp.MustCompile(appConfig.AllowedOrigins)
 	upgraderConfig := websocket.Upgrader{
-		// Do not check origin. Allow all incoming connections. CSRFs are welcome.
-		// TODO: Check origin by wildcard. E.g. instance-*.example.com:8765.
-		CheckOrigin: func(r *http.Request) bool { return true },
+		CheckOrigin: func(r *http.Request) bool {
+			origin := r.Header["Origin"]
+			if len(origin) == 0 {
+				return true
+			}
+			return allowedOriginPattern.MatchString(origin[0])
+		},
 	}
 
 	handler := WebSocketHandler{

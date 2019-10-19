@@ -35,6 +35,8 @@ type AppConfig struct {
 	RedisPassword string
 	RedisDatabase int
 
+	AllowedOrigins string
+
 	WebSocketAppAddresses []string
 }
 
