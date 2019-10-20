@@ -1,0 +1,25 @@
+FROM golang:1.13 AS builder
+
+WORKDIR $GOPATH/src/github.com/pbsphp/ShittyPixels
+COPY . .
+
+RUN go get -d -v github.com/go-redis/redis && \
+    go get -d -v github.com/gorilla/websocket && \
+    go get -d -v golang.org/x/image/colornames && \
+    cd ws_server && \
+    CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go install -a -installsuffix cgo && \
+    mv $GOPATH/bin/ws_server /shittypixels_ws && \
+    go clean && \
+    cd .. && \
+    rm -rf ./*
+
+FROM alpine:3.9 AS certs
+
+RUN apk add -U --no-cache ca-certificates
+
+FROM scratch
+
+COPY --from=builder /shittypixels_ws /shittypixels_ws
+COPY ./config.json /config.json
+COPY ./gopher.png /gopher.png
+COPY --from=certs /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/

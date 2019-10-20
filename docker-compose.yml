@@ -1,0 +1,41 @@
+version: '3'
+services:
+  server:
+    build:
+      context: .
+      dockerfile: Dockerfile_server
+    ports:
+      - "8080:8080"
+    command: /shittypixels
+    depends_on:
+      - redis
+  # TODO: Use up --scale
+  ws_server0:
+    build:
+      context: .
+      dockerfile: Dockerfile_ws_server
+    ports:
+      - "12345:12345"
+    command: /shittypixels_ws -n=0 -listen=:12345
+    depends_on:
+      - redis
+  ws_server1:
+    build:
+      context: .
+      dockerfile: Dockerfile_ws_server
+    ports:
+      - "12346:12346"
+    command: /shittypixels_ws -n=1 -listen=:12346
+    depends_on:
+      - redis
+  ws_server2:
+    build:
+      context: .
+      dockerfile: Dockerfile_ws_server
+    ports:
+      - "12347:12347"
+    command: /shittypixels_ws -n=2 -listen=:12347
+    depends_on:
+      - redis
+  redis:
+    image: "redis:alpine"
