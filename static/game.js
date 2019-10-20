@@ -160,7 +160,6 @@ class PaletteWidget {
     constructor(tableDomElement, colorsList) {
         this.fillPaletteTable = this.fillPaletteTable.bind(this);
         this.selectCell = this.selectCell.bind(this);
-        this.handleColorChoose = this.handleColorChoose.bind(this);
 
         this.tableDomElement = tableDomElement;
         this.colorsList = colorsList;
@@ -176,7 +175,7 @@ class PaletteWidget {
             cell.classList.add("palette-cell");
             cell.style.backgroundColor = this.colorsList[i];
             cell.dataset.color = i.toString();
-            cell.onclick = this.handleColorChoose;
+            cell.onclick = () => this.selectCell(cell);
         }
 
         this.selectCell(paletteRow.cells[0]);
@@ -192,10 +191,6 @@ class PaletteWidget {
         }
 
         selectedCell.classList.add("pallet-cell-selected");
-    }
-
-    handleColorChoose(evt) {
-        this.selectCell(evt.srcElement);
     }
 }
 
