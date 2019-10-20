@@ -122,21 +122,77 @@ type WebSocketResponseData struct {
 	Data interface{} `json:"data"`
 }
 
+// Wrapper around websocket.Conn.
+type WebSocketConnectionWrapper struct {
+	conn *websocket.Conn
+}
+
+// Flag for returning from some of the functions.
+// CanNotContinue value tells that we have troubles with web socket connection and should close connection with user.
+// CanContinue value tells about other problems (for example: json parsing error).
+type CanContinueFlag int
+
+const (
+	CanContinue    CanContinueFlag = iota
+	CanNotContinue                 = iota
+)
+
+// Create new web socket connection wrapper.
+func NewWebSocketConnectionWrapper(
+	upgraderConfig *websocket.Upgrader,
+	w http.ResponseWriter,
+	r *http.Request,
+) (*WebSocketConnectionWrapper, error) {
+	c := WebSocketConnectionWrapper{}
+	conn, err := upgraderConfig.Upgrade(w, r, nil)
+	if err != nil {
+		return &c, err
+	}
+	c.conn = conn
+	return &c, nil
+}
+
+func (c *WebSocketConnectionWrapper) Close() error {
+	return c.conn.Close()
+}
+
+// Read message from web socket and convert to WebSocketRequestData object.
+func (c *WebSocketConnectionWrapper) ReadMessage() (int, *WebSocketRequestData, CanContinueFlag, error) {
+	reqData := WebSocketRequestData{}
+
+	mt, message, err := c.conn.ReadMessage()
+	if err != nil {
+		return mt, &reqData, CanNotContinue, err
+	}
+
+	err = json.Unmarshal(message, &reqData)
+	if err != nil {
+		return mt, &reqData, CanContinue, err
+	}
+
+	return mt, &reqData, CanContinue, nil
+}
+
+// Send WebSocketResponseData to connection.
+func (c *WebSocketConnectionWrapper) WriteMessage(mt int, msg *WebSocketResponseData) (CanContinueFlag, error) {
+	response, err := json.Marshal(msg)
+	if err != nil {
+		return CanContinue, err
+	}
+
+	err = c.conn.WriteMessage(mt, response)
+	if err != nil {
+		return CanNotContinue, err
+	}
+
+	return CanContinue, nil
+}
+
 // Pixel representation for transfer: coords and color.
 type PixelInfo struct {
 	X     int   `json:"x"`
 	Y     int   `json:"y"`
 	Color Color `json:"color"`
-}
-
-// Is token present in Redis database
-func isSessionTokenPresent(rdb *redis.Client, token string) (error, bool) {
-	err := rdb.Get("sessionToken:" + token).Err()
-	if err != nil && err != redis.Nil {
-		return err, false
-	}
-
-	return nil, err != redis.Nil
 }
 
 // Convert map returned by json.Unmarshal to PixelInfo.
@@ -267,12 +323,13 @@ func MustDrawInitialImage(
 	}
 }
 
+// Handler for http.Handle function. Will respond to HTTP request, upgrade connection to WebSocket and do all stuff.
 type WebSocketHandler struct {
 	rdb            *redis.Client
 	appConfig      *common.AppConfig
 	upgraderConfig websocket.Upgrader
 
-	allConnections map[*websocket.Conn]struct{}
+	allConnections map[*WebSocketConnectionWrapper]struct{}
 	matrix         *Matrix
 
 	instanceNumber int
@@ -280,7 +337,7 @@ type WebSocketHandler struct {
 }
 
 func (h *WebSocketHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	c, err := h.upgraderConfig.Upgrade(w, r, nil)
+	c, err := NewWebSocketConnectionWrapper(&h.upgraderConfig, w, r)
 	if err != nil {
 		logError("upgrade", err)
 		return
@@ -292,20 +349,18 @@ func (h *WebSocketHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}()
 
 	for {
-		mt, message, err := c.ReadMessage()
+		mt, wsMessage, canContinue, err := c.ReadMessage()
 		if err != nil {
 			if !isWsClosedOk(err) {
-				logError("read", err)
+				logError("read websocket request", err)
 			}
-			delete(h.allConnections, c)
-			return
-		}
 
-		wsMessage := WebSocketRequestData{}
-		err = json.Unmarshal(message, &wsMessage)
-		if err != nil {
-			logError("unmarshal", err)
-			continue
+			delete(h.allConnections, c)
+
+			if canContinue == CanContinue {
+				continue
+			}
+			return
 		}
 
 		// Check that user is authenticated (session has Login)
@@ -320,17 +375,17 @@ func (h *WebSocketHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 
-		ok := true
+		canContinue = CanContinue
 		switch wsMessage.Method {
 		case "setPixelColor":
-			ok = h.handleSetPixelColor(&wsMessage, mt, c)
+			canContinue = h.handleSetPixelColor(wsMessage, mt, c)
 		case "connectMe":
-			ok = h.handleConnectMe(&wsMessage, mt, c)
+			canContinue = h.handleConnectMe(wsMessage, mt, c)
 		default:
 			logError("unsupported method", nil)
 		}
 
-		if !ok {
+		if canContinue == CanNotContinue {
 			return
 		}
 	}
@@ -354,29 +409,33 @@ func (h *WebSocketHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 //     "kind": "pixelColor",
 //     "data": { (same) }
 // }
-func (h *WebSocketHandler) handleSetPixelColor(wsMessage *WebSocketRequestData, mt int, c *websocket.Conn) bool {
+func (h *WebSocketHandler) handleSetPixelColor(
+	wsMessage *WebSocketRequestData,
+	mt int,
+	c *WebSocketConnectionWrapper,
+) CanContinueFlag {
 	pixel, err := argsToPixelInfo(wsMessage.Args)
 	if err != nil {
 		// Problems with user data. Just ignore.
 		logError("unmarshal (data)", err)
-		return true
+		return CanContinue
 	}
 
 	err, hasOldCooldown := common.TestAndUpdateSessionCooldown(h.rdb, h.appConfig, wsMessage.SessionToken)
 	if err != nil {
 		logError("update redis cooldown", err)
-		return true
+		return CanContinue
 	}
 	if hasOldCooldown {
 		// Cooldown time does not expire yet. Maybe cheating. Ignore request.
-		return true
+		return CanContinue
 	}
 
 	ok := h.matrix.Set(pixel.X, pixel.Y, pixel.Color)
 	if !ok {
 		// This pixel is managed by other worker.
 		// Ignore request.
-		return true
+		return CanContinue
 	}
 
 	log.Printf("setPixelColor(x=%d, y=%d, color(code)=%d)\n", pixel.X, pixel.Y, pixel.Color)
@@ -385,38 +444,30 @@ func (h *WebSocketHandler) handleSetPixelColor(wsMessage *WebSocketRequestData, 
 		Kind: "pixelColor",
 		Data: pixel,
 	}
-	response, err := json.Marshal(&wsResponse)
-	if err != nil {
-		logError("marshal", err)
-		return true
-	}
 
 	// Notify all connections.
 	// Also collect invalid connections and remove them from `allConnections' list.
-	invalidConnections := make([]*websocket.Conn, 0, 1)
+	invalidConnections := make([]*WebSocketConnectionWrapper, 0, 1)
 	for conn := range h.allConnections {
-		err = conn.WriteMessage(mt, response)
-		if err != nil {
-			if !isWsClosedOk(err) {
-				logError("read", err)
-			}
+		canContinue, err := conn.WriteMessage(mt, &wsResponse)
+		if err != nil && !isWsClosedOk(err) {
+			logError("write response (broadcast)", err)
+		}
+		if canContinue == CanNotContinue {
 			invalidConnections = append(invalidConnections, conn)
 		}
 	}
 
-	isCurrentConnectionInvalid := false
+	canContinue := CanContinue
 	for _, conn := range invalidConnections {
 		delete(h.allConnections, conn)
 
 		if conn == c {
-			isCurrentConnectionInvalid = true
+			canContinue = CanNotContinue
 		}
 	}
-	if isCurrentConnectionInvalid {
-		return false
-	}
 
-	return true
+	return canContinue
 }
 
 // Handle connectMe method
@@ -435,7 +486,11 @@ func (h *WebSocketHandler) handleSetPixelColor(wsMessage *WebSocketRequestData, 
 // 		   ...
 //     ]
 // }
-func (h *WebSocketHandler) handleConnectMe(wsMessage *WebSocketRequestData, mt int, c *websocket.Conn) bool {
+func (h *WebSocketHandler) handleConnectMe(
+	wsMessage *WebSocketRequestData,
+	mt int,
+	c *WebSocketConnectionWrapper,
+) CanContinueFlag {
 	log.Printf("connectMe()\n")
 
 	_, ok := h.allConnections[c]
@@ -455,51 +510,37 @@ func (h *WebSocketHandler) handleConnectMe(wsMessage *WebSocketRequestData, mt i
 			EachNth:    h.totalInstances,
 		},
 	}
-	response, err := json.Marshal(&wsResponse)
+	canContinue, err := c.WriteMessage(mt, &wsResponse)
 	if err != nil {
-		logError("marshal", err)
-		return true
-	}
-
-	err = c.WriteMessage(mt, response)
-	if err != nil {
-		if isWsClosedOk(err) {
-			delete(h.allConnections, c)
-		} else {
-			logError("read", err)
+		if !isWsClosedOk(err) {
+			logError("write response", err)
 		}
-		return false
+		delete(h.allConnections, c)
+		return canContinue
 	}
 
 	// Also send cooldown info (if present)
 	cooldown, err := common.GetSessionCooldownBySessionId(h.rdb, wsMessage.SessionToken)
 	if err != nil {
 		logError("redis read cooldown", err)
-		return false
+		return CanNotContinue
 	}
 	if cooldown > 0 {
 		wsResponse := WebSocketResponseData{
 			Kind: "cooldownInfo",
 			Data: cooldown,
 		}
-		response, err := json.Marshal(&wsResponse)
+		canContinue, err := c.WriteMessage(mt, &wsResponse)
 		if err != nil {
-			logError("marshal", err)
-			return true
-		}
-
-		err = c.WriteMessage(mt, response)
-		if err != nil {
-			if isWsClosedOk(err) {
-				delete(h.allConnections, c)
-			} else {
-				logError("read", err)
+			if !isWsClosedOk(err) {
+				logError("write response", err)
 			}
-			return false
+			delete(h.allConnections, c)
+			return canContinue
 		}
 	}
 
-	return true
+	return CanContinue
 }
 
 func main() {
@@ -522,7 +563,7 @@ func main() {
 	// List of all connections.
 	// We store all websocket connections with active users. When someone has changed pixel color we iterate over
 	// `allConnections' and notify each user about changes.
-	allConnections := make(map[*websocket.Conn]struct{})
+	allConnections := make(map[*WebSocketConnectionWrapper]struct{})
 
 	// Allocate canvas matrix. Items are colors.
 	matrix := NewMatrix(appConfig.CanvasCols, appConfig.CanvasRows, instanceNumber, totalInstances)

@@ -24,7 +24,7 @@
 
     "InitialImage": "./gopher.png",
 
-    "RedisAddress": "redis:6379",
+    "RedisAddress": "localhost:6379",
     "RedisPassword": "",
     "RedisDatabase": 0,
 
